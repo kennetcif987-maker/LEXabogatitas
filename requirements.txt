@@ -2,3 +2,5 @@ streamlit
 pandas
 requests
 PyMuPDF
+google-genai
+python-docx
