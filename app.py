@@ -4,6 +4,7 @@ import json
 import os
 import time
 import re
+import uuid
 import fitz  
 from modulos.conexion_api import analizar_expediente
 from modulos.base_datos import (
@@ -187,16 +188,19 @@ def main():
 
                 for i, file in enumerate(uploaded_files):
                     status.text(f"Auditando documento {i+1} de {len(uploaded_files)}: {file.name}...")
-                    temp_path = f"temp_{file.name}"
-                    with open(temp_path, "wb") as tmp: tmp.write(file.getbuffer())
+                    temp_path = f"temp_{uuid.uuid4().hex}_{file.name}"
+                    try:
+                        with open(temp_path, "wb") as tmp:
+                            tmp.write(file.getbuffer())
 
-                    raw_response = analizar_expediente(temp_path)
-                    all_raw[file.name] = raw_response
+                        raw_response = analizar_expediente(temp_path)
+                        all_raw[file.name] = raw_response
 
-                    data = procesar_respuesta_gemini(raw_response, file.name)
-                    res_temp.append(data)
-
-                    if os.path.exists(temp_path): os.remove(temp_path)
+                        data = procesar_respuesta_gemini(raw_response, file.name)
+                        res_temp.append(data)
+                    finally:
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
                     bar.progress((i + 1) / len(uploaded_files))
 
                     if i < len(uploaded_files) - 1:

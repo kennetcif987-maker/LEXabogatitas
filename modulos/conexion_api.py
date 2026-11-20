@@ -41,7 +41,7 @@ class InstrumentoLegalSchema(BaseModel):
     alertas_forenses: str = Field(default="Ninguna", description="Anomalías, fojas faltantes o requisitos legales pendientes")
 
 # 3. Compresión y optimización visual
-def _preparar_partes_multimodales(ruta_archivo, max_paginas=4, max_dim=1500):
+def _preparar_partes_multimodales(ruta_archivo, max_paginas=6, max_dim=1600):
     ext = os.path.splitext(ruta_archivo)[1].lower()
     partes = []
 
@@ -52,12 +52,13 @@ def _preparar_partes_multimodales(ruta_archivo, max_paginas=4, max_dim=1500):
         
         for p_no in indices:
             page = doc[p_no]
-            pix = page.get_pixmap(dpi=130)
+            pix = page.get_pixmap(dpi=150)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
             buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=80)
+            img.save(buf, format="JPEG", quality=85)
             partes.append(types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg"))
+        doc.close()
             
     elif ext in ['.png', '.jpg', '.jpeg']:
         img = Image.open(ruta_archivo)
@@ -118,8 +119,14 @@ def analizar_expediente(ruta_archivo):
             
         partes.append(types.Part.from_text(text=prompt))
 
-        # Modelos prioritarios de Gemini 3.1 Flash disponibles
-        modelos_a_probar = ['gemini-3.1-flash-lite', 'gemini-3.1-flash-lite-preview', 'gemini-3.5-flash-lite', 'gemini-3.8-flash']
+        # Modelos prioritarios de Gemini Flash disponibles
+        modelos_a_probar = [
+            'gemini-3.1-flash-lite',
+            'gemini-3.1-flash-lite-preview',
+            'gemini-3.5-flash-lite',
+            'gemini-2.5-flash-lite',
+            'gemini-2.5-flash',
+        ]
         
         for modelo in modelos_a_probar:
             for intento in range(2):
