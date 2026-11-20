@@ -1,0 +1,30 @@
+# Python & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Node & Build
+node_modules/
+dist/
+build/
+
+# Credenciales y Secretos de API (MÁXIMA PRIORIDAD)
+.streamlit/secrets.toml
+secrets.toml
+.env
+.env.*
+*.pem
+*.key
+
+# Bases de datos locales y respaldos
+*.db
+*.sqlite3
+*.db-journal
+backup_original/
+
+# IDEs
+.vscode/
+.idea/
