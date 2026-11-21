@@ -36,6 +36,34 @@ if 'analisis_completado' not in st.session_state: st.session_state['analisis_com
 if 'uploader_key' not in st.session_state: st.session_state['uploader_key'] = 0
 if 'all_raw_responses' not in st.session_state: st.session_state['all_raw_responses'] = {}
 
+def _validar_nit_m11_lex(nit_raw: str) -> bool:
+    s = re.sub(r"[^0-9K]", "", str(nit_raw or "").upper())
+    if len(s) < 2 or not s[:-1].isdigit() or s.startswith("0"):
+        return False
+    suma = sum(int(d) * (i + 2) for i, d in enumerate(reversed(s[:-1])))
+    res = (11 - (suma % 11)) % 11
+    return s[-1] == ("K" if res == 10 else str(res))
+
+
+def _normalizar_doc_identidad_lex(dpi_raw: str, nit_raw: str, rol_label: str, alertas: list):
+    dpi_str = str(dpi_raw or "No detectado").strip()
+    if dpi_str and "no detectado" not in dpi_str.lower() and dpi_str.lower() not in ("n/a", "none"):
+        digs = re.sub(r"\D", "", dpi_str)
+        if len(digs) == 13:
+            dpi_str = digs
+        else:
+            alertas.append(f"DPI {rol_label} incompleto ({len(digs)} dígitos, debe tener 13)")
+
+    nit_str = str(nit_raw or "No detectado").strip().upper()
+    if nit_str and "no detectado" not in nit_str.lower() and nit_str not in ("N/A", "CF", "C/F", "NONE"):
+        nit_clean = nit_str.replace(" ", "").replace("-", "")
+        if _validar_nit_m11_lex(nit_clean):
+            nit_str = nit_clean
+        else:
+            alertas.append(f"NIT {rol_label} no supera Módulo 11 ({nit_str})")
+    return dpi_str, nit_str
+
+
 # --- 3. PROCESAMIENTO FORENSE DE RESPUESTAS GEMINI ---
 def procesar_respuesta_gemini(raw_response, file_name):
     data = {
@@ -89,19 +117,26 @@ def procesar_respuesta_gemini(raw_response, file_name):
             data["anomalia"] = str(parsed.get("alertas_forenses", "ninguna"))
 
             otorgantes = parsed.get("otorgantes_o_partes", [])
+            alertas_id = []
             if isinstance(otorgantes, list) and len(otorgantes) > 0:
                 p1 = otorgantes[0]
                 data["demandante"] = f"{p1.get('nombre_completo', 'Desconocido')} ({p1.get('rol_en_acto', 'Parte 1')})"
-                data["dpi_demandante"] = str(p1.get("identificacion_dpi", "No detectado"))
-                data["nit_demandante"] = str(p1.get("nit", "No detectado"))
+                d1, n1 = _normalizar_doc_identidad_lex(p1.get("identificacion_dpi"), p1.get("nit"), "Parte 1", alertas_id)
+                data["dpi_demandante"] = d1
+                data["nit_demandante"] = n1
 
                 if len(otorgantes) > 1:
                     p2_list = [f"{p.get('nombre_completo', '')} ({p.get('rol_en_acto', '')})" for p in otorgantes[1:]]
                     data["demandado"] = " | ".join(p2_list)
-                    data["dpi_demandado"] = str(otorgantes[1].get("identificacion_dpi", "No detectado"))
-                    data["nit_demandado"] = str(otorgantes[1].get("nit", "No detectado"))
+                    d2, n2 = _normalizar_doc_identidad_lex(otorgantes[1].get("identificacion_dpi"), otorgantes[1].get("nit"), "Parte 2", alertas_id)
+                    data["dpi_demandado"] = d2
+                    data["nit_demandado"] = n2
                 else:
                     data["demandado"] = "Unilateral / Acto notarial sin contraparte"
+            if alertas_id:
+                base_anom = str(data.get("anomalia") or "").strip()
+                extra = " | ".join(f"⚠️ {a}" for a in alertas_id)
+                data["anomalia"] = extra if base_anom.lower() in ("", "ninguna", "none") else f"{base_anom} | {extra}"
     except Exception as e:
         data["anomalia"] = f"Parseo parcial: {str(e)}"
 

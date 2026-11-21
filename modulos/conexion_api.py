@@ -98,7 +98,7 @@ def analizar_expediente(ruta_archivo):
     1. Si es PROTOCOLO NOTARIAL:
        - Identifica el Número de Instrumento (escritura/acta).
        - Identifica el Número de Folio con sufijo 'A' (Anverso) o 'R' (Reverso) (ej: '1 A', '5 R', '16 R').
-       - Extrae a todos los comparecientes (nombres exactos), su rol (Vendedor, Comprador, Mandante, Mandatario, Cónyuge, etc.) y su DPI (13 dígitos) o NIT.
+       - Extrae a todos los comparecientes (nombres exactos), su rol (Vendedor, Comprador, Mandante, Mandatario, Cónyuge, etc.), su DPI convertido exactamente a 13 dígitos sin espacios (aun si viene escrito en letras en la escritura, ej. "dos mil cuatrocientos..." -> 13 dígitos) y su NIT sin guiones.
        - Determina el negocio jurídico exacto (Mandato, Compraventa, Promesa, Capitulaciones, Arrendamiento, Construcción de Obra, Protocolización de Matrimonio, Toma de Razón, etc.).
        - Calcula el precio/cuantía e impuestos aplicables en Guatemala (IVA 12%, Timbres Fiscales 3%, Timbre Notarial 2 por millar máx Q300, Timbre Notarial fijo Q10 para mandatos).
        - Indica el registro de destino (Registro de la Propiedad, Archivo General de Protocolos Poderes, RENAP).
