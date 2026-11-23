@@ -191,6 +191,100 @@ def autenticar_usuario(usuario, password):
         conexion.close()
 
 
+def _listar_empresas_en_cursor(cursor) -> list:
+    empresas = set()
+    cursor.execute("SELECT DISTINCT empresa FROM usuarios WHERE empresa IS NOT NULL AND TRIM(empresa) != ''")
+    for (emp,) in cursor.fetchall():
+        empresas.add(str(emp).strip())
+    try:
+        cursor.execute(
+            "SELECT DISTINCT bufete_propietario FROM expedientes WHERE bufete_propietario IS NOT NULL AND TRIM(bufete_propietario) != ''"
+        )
+        for (emp,) in cursor.fetchall():
+            empresas.add(str(emp).strip())
+    except Exception:
+        pass
+    return sorted(empresas, key=lambda s: s.lower())
+
+
+def obtener_empresas_activas() -> list:
+    """Lista todas las empresas/bufetes existentes (para Super-Admin maestro)."""
+    conexion = conectar()
+    cursor = conexion.cursor()
+    try:
+        return _listar_empresas_en_cursor(cursor)
+    finally:
+        cursor.close()
+        conexion.close()
+
+
+def resolver_nombre_empresa_unico(nombre_deseado: str, cursor=None) -> str:
+    """
+    Garantiza nombres de empresa/bufete 100% únicos sin distinción de mayúsculas.
+    Si 'A' ya existe, asigna 'A1'; si 'A1' existe, 'A2', etc.
+    """
+    base = " ".join(str(nombre_deseado or "").split())
+    if not base:
+        base = "Despacho"
+
+    cerrar = False
+    conn = None
+    if cursor is None:
+        conn = conectar()
+        cursor = conn.cursor()
+        cerrar = True
+
+    try:
+        existentes = {e.strip().lower() for e in _listar_empresas_en_cursor(cursor)}
+        if base.lower() not in existentes:
+            return base
+        i = 1
+        while f"{base}{i}".lower() in existentes:
+            i += 1
+        return f"{base}{i}"
+    finally:
+        if cerrar and conn is not None:
+            cursor.close()
+            conn.close()
+
+
+def registrar_nueva_empresa_usuario(u: str, p_raw: str, empresa_deseada: str, r: str) -> Tuple[bool, str, str]:
+    """
+    Crea una nueva empresa/bufete completamente aislada garantizando nombre único (A -> A1)
+    y registra su usuario inicial dentro de la misma transacción.
+    Retorna (exito, empresa_final_asignada, mensaje).
+    """
+    u_limpio = str(u or "").strip()
+    emp_limpia = " ".join(str(empresa_deseada or "").split())
+    if not u_limpio or not p_raw or not emp_limpia:
+        return False, "", "Complete usuario, contraseña y nombre de empresa/bufete."
+
+    conexion = conectar()
+    cursor = conexion.cursor()
+    p = _ph()
+    err_types = (sqlite3.IntegrityError,) + ((psycopg2.IntegrityError,) if psycopg2 else ())
+    try:
+        empresa_final = resolver_nombre_empresa_unico(emp_limpia, cursor=cursor)
+        cursor.execute(
+            f"INSERT INTO usuarios (usuario, password, empresa, rol) VALUES ({p}, {p}, {p}, {p})",
+            (u_limpio, encriptar_password(p_raw), empresa_final, r),
+        )
+        conexion.commit()
+        if empresa_final.lower() != emp_limpia.lower():
+            return (
+                True,
+                empresa_final,
+                f"El nombre '{emp_limpia}' ya existía; se creó de forma aislada como '{empresa_final}'.",
+            )
+        return True, empresa_final, f"Empresa '{empresa_final}' creada y aislada correctamente."
+    except err_types:
+        conexion.rollback()
+        return False, "", f"El ID de usuario '{u_limpio}' ya está en uso en el sistema."
+    finally:
+        cursor.close()
+        conexion.close()
+
+
 def registrar_usuario(u, p_raw, e, r):
     conexion = conectar()
     cursor = conexion.cursor()
@@ -238,7 +332,7 @@ def obtener_usuarios_empresa(empresa):
     p = _ph()
     try:
         cursor.execute(
-            f"SELECT usuario, rol FROM usuarios WHERE empresa = {p}",
+            f"SELECT usuario, rol FROM usuarios WHERE empresa = {p} ORDER BY usuario",
             (empresa,),
         )
         columnas = [desc[0] for desc in cursor.description]
@@ -248,7 +342,22 @@ def obtener_usuarios_empresa(empresa):
         conexion.close()
 
 
-def eliminar_usuario(usuario, empresa=None):
+def obtener_todos_usuarios() -> pd.DataFrame:
+    """Retorna todos los usuarios con su empresa/bufete asignado (solo para Super-Admin 'admin')."""
+    conexion = conectar()
+    cursor = conexion.cursor()
+    try:
+        cursor.execute("SELECT usuario, empresa, rol FROM usuarios ORDER BY empresa, usuario")
+        columnas = [desc[0] for desc in cursor.description]
+        return pd.DataFrame(cursor.fetchall(), columns=columnas)
+    finally:
+        cursor.close()
+        conexion.close()
+
+
+def eliminar_usuario(usuario, empresa=None, actor=None):
+    if usuario == "admin" or (actor and usuario == actor):
+        return False
     conexion = conectar()
     cursor = conexion.cursor()
     p = _ph()
@@ -264,6 +373,7 @@ def eliminar_usuario(usuario, empresa=None):
                 (usuario,),
             )
         conexion.commit()
+        return cursor.rowcount > 0
     finally:
         cursor.close()
         conexion.close()

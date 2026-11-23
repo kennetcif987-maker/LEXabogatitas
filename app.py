@@ -15,8 +15,11 @@ from modulos.base_datos import (
     eliminar_usuario,
     guardar_expedientes,
     inicializar_db_una_vez,
+    obtener_empresas_activas,
     obtener_historial,
+    obtener_todos_usuarios,
     obtener_usuarios_empresa,
+    registrar_nueva_empresa_usuario,
     registrar_usuario,
 )
 from modulos.catalogo_plantillas import CATALOGO_PLANTILLAS
@@ -953,62 +956,115 @@ def main():
             st.info("No hay registros almacenados todavía.")
 
     # =========================================================================
-    # PESTAÑA 6: ADMINISTRACIÓN SAAS Y GESTIÓN DE USUARIOS
+    # PESTAÑA 6: ADMINISTRACIÓN SAAS Y GESTIÓN MULTI-EMPRESA
     # =========================================================================
     if es_admin:
         with tabs[5]:
-            st.header("⚙️ Gobernanza, Control de Accesos y Soporte del Bufete")
-            st.markdown("Gestione los abogados, secretarias y procuradores que tienen acceso al sistema.")
+            es_super_admin = abogado_activo == "admin"
+            st.header("⚙️ Gobernanza, Control de Accesos y Aislamiento de Bufetes")
+            if es_super_admin:
+                st.caption(
+                    "👑 **Modo Super-Admin Maestro (`admin`):** Cada empresa/bufete creado queda aislado. "
+                    "Si ingresa un nombre repetido (ej. `A`), el sistema asignará automáticamente `A1`, `A2`, etc."
+                )
+            else:
+                st.caption(f"🏢 Administración aislada de **{bufete}**.")
 
             col_admin_a, col_admin_b = st.columns([1, 1.3])
 
             with col_admin_a:
-                st.subheader("➕ Registrar Nuevo Abogado o Colaborador")
-                with st.form("form_crear_usuario"):
-                    nuevo_id = st.text_input("ID o Correo de Usuario:")
-                    nuevo_pass = st.text_input("Contraseña Temporal:", type="password")
-                    nuevo_rol = st.selectbox(
-                        "Nivel de Acceso / Rol:",
-                        ["Abogado Asociado", "Secretaria / Procurador", "Administrador"],
+                st.subheader("➕ Alta de Empresa o Colaborador")
+                modo_alta = "👤 Colaborador en este Bufete"
+                emp_existente_sel = bufete
+                if es_super_admin:
+                    modo_alta = st.radio(
+                        "Tipo de Registro:",
+                        ["🏢 Nueva Empresa / Bufete Independiente", "👤 Colaborador en Bufete Existente"],
+                        horizontal=True,
+                        key="lex_modo_alta",
                     )
+                    if modo_alta == "👤 Colaborador en Bufete Existente":
+                        empresas_disp = obtener_empresas_activas() or [bufete]
+                        emp_existente_sel = st.selectbox(
+                            "Bufete / Empresa Destino:",
+                            empresas_disp,
+                            key="lex_emp_destino",
+                        )
+
+                with st.form("form_crear_usuario"):
+                    emp_nueva_in = ""
+                    if es_super_admin and modo_alta.startswith("🏢"):
+                        emp_nueva_in = st.text_input(
+                            "Nombre de la Nueva Empresa / Bufete:",
+                            placeholder="Ej. Bufete A (si existe creará A1)",
+                        )
+                    nuevo_id = st.text_input("ID o Correo de Usuario:")
+                    nuevo_pass = st.text_input("Contraseña Temporal (mín. 6 caracteres):", type="password")
+                    roles_opc = (
+                        ["Administrador", "Abogado Asociado", "Secretaria / Procurador"]
+                        if (es_super_admin and modo_alta.startswith("🏢"))
+                        else ["Abogado Asociado", "Secretaria / Procurador", "Administrador"]
+                    )
+                    nuevo_rol = st.selectbox("Nivel de Acceso / Rol:", roles_opc)
 
                     if st.form_submit_button("Crear Credencial de Acceso", type="primary", use_container_width=True):
-                        if nuevo_id and nuevo_pass:
-                            if registrar_usuario(nuevo_id.strip(), nuevo_pass.strip(), bufete, nuevo_rol):
-                                st.success(f"✅ Usuario '{nuevo_id}' creado exitosamente.")
+                        if not nuevo_id.strip() or len(nuevo_pass.strip()) < 6:
+                            st.warning("⚠️ Ingrese usuario válido y contraseña de al menos 6 caracteres.")
+                        elif es_super_admin and modo_alta.startswith("🏢"):
+                            if not emp_nueva_in.strip():
+                                st.warning("⚠️ Escriba el nombre de la nueva empresa o bufete.")
+                            else:
+                                ok, emp_final, msg = registrar_nueva_empresa_usuario(
+                                    nuevo_id.strip(), nuevo_pass.strip(), emp_nueva_in.strip(), nuevo_rol
+                                )
+                                if ok:
+                                    st.success(f"✅ {msg} Usuario: `{nuevo_id.strip()}` (`{emp_final}`).")
+                                    time.sleep(1.2)
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ {msg}")
+                        else:
+                            if registrar_usuario(nuevo_id.strip(), nuevo_pass.strip(), emp_existente_sel, nuevo_rol):
+                                st.success(f"✅ Usuario '{nuevo_id.strip()}' creado en '{emp_existente_sel}'.")
                                 time.sleep(1)
                                 st.rerun()
                             else:
                                 st.error("❌ Error: Ese usuario ya se encuentra registrado en el sistema.")
-                        else:
-                            st.warning("⚠️ Complete todos los campos.")
 
             with col_admin_b:
                 st.subheader("📋 Nómina de Usuarios Activos")
-                df_usuarios = obtener_usuarios_empresa(bufete)
+                df_usuarios = obtener_todos_usuarios() if es_super_admin else obtener_usuarios_empresa(bufete)
                 if not df_usuarios.empty:
+                    if es_super_admin and "empresa" in df_usuarios.columns:
+                        st.caption(f"Bufetes/Empresas aisladas activas: **{df_usuarios['empresa'].nunique()}**")
                     st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
+
+                    if es_super_admin and "empresa" in df_usuarios.columns:
+                        opciones_u = list(zip(df_usuarios["usuario"].tolist(), df_usuarios["empresa"].tolist()))
+                        fmt_u = lambda par: f"{par[0]}  [{par[1]}]"
+                    else:
+                        opciones_u = [(u, bufete) for u in df_usuarios["usuario"].tolist()]
+                        fmt_u = lambda par: par[0]
 
                     st.write("---")
                     st.subheader("🔑 Soporte Técnico: Restablecer Contraseña Olvidada")
                     with st.form("form_reset_pass"):
-                        lista_u = df_usuarios["usuario"].tolist()
-                        u_reset = st.selectbox("Seleccione el usuario que olvidó o perdió su clave:", lista_u)
-                        p_nueva = st.text_input("Nueva Contraseña Temporal:", type="password")
+                        sel_reset = st.selectbox("Seleccione usuario:", opciones_u, format_func=fmt_u)
+                        p_nueva = st.text_input("Nueva Contraseña Temporal (mín. 6 caracteres):", type="password")
 
                         if st.form_submit_button("Forzar Cambio de Contraseña", type="primary", use_container_width=True):
-                            if p_nueva:
-                                actualizar_password(u_reset, p_nueva, empresa=bufete)
-                                st.success(
-                                    f"✅ La contraseña de '{u_reset}' fue restablecida con éxito. Ya puede iniciar sesión con la nueva clave."
-                                )
+                            if len(p_nueva.strip()) < 6:
+                                st.warning("⚠️ La contraseña temporal debe tener al menos 6 caracteres.")
                             else:
-                                st.warning("Escriba la nueva contraseña temporal.")
+                                u_r, emp_r = sel_reset
+                                actualizar_password(u_r, p_nueva.strip(), empresa=emp_r)
+                                st.success(f"✅ Contraseña de '{u_r}' ({emp_r}) restablecida con éxito.")
 
                     st.write("---")
                     st.subheader("🚫 Revocar Acceso / Eliminar Usuario")
                     with st.form("form_eliminar_u"):
-                        u_eliminar = st.selectbox("Seleccione usuario a dar de baja:", lista_u)
+                        sel_del = st.selectbox("Seleccione usuario a dar de baja:", opciones_u, format_func=fmt_u)
+                        u_eliminar, emp_eliminar = sel_del
                         if u_eliminar == "admin":
                             st.caption("🔒 El usuario Maestro 'admin' está protegido y no puede ser eliminado.")
                         elif u_eliminar == abogado_activo:
@@ -1018,12 +1074,12 @@ def main():
                             if u_eliminar == "admin" or u_eliminar == abogado_activo:
                                 st.error("❌ Acción denegada: No puede eliminar al Administrador Maestro ni su usuario activo.")
                             else:
-                                eliminar_usuario(u_eliminar, empresa=bufete)
-                                st.warning(f"⚠️ Acceso de '{u_eliminar}' revocado de forma permanente.")
+                                eliminar_usuario(u_eliminar, empresa=emp_eliminar, actor=abogado_activo)
+                                st.warning(f"⚠️ Acceso de '{u_eliminar}' ({emp_eliminar}) revocado de forma permanente.")
                                 time.sleep(1)
                                 st.rerun()
                 else:
-                    st.info("No hay colaboradores registrados en este bufete.")
+                    st.info("No hay colaboradores registrados todavía.")
 
 
 if __name__ == "__main__":
