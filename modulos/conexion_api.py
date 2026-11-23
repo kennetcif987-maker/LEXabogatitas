@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 MODEL_ID = "gemini-3.1-flash-lite"
 MODEL_FALLBACKS = (
     "gemini-3.1-flash-lite",
-    "gemini-2.5-flash-lite",
     "gemini-flash-latest",
     "gemini-3-flash-preview",
 )
@@ -34,7 +33,7 @@ def _obtener_cliente() -> genai.Client:
         raise ValueError(
             "GEMINI_API_KEY no configurada. Agréguela en .streamlit/secrets.toml o Secrets de Streamlit Cloud."
         )
-    return genai.Client(api_key=api_key)
+    return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=25000))
 
 
 class OtorganteOParte(BaseModel):
@@ -210,25 +209,23 @@ def analizar_expediente(ruta_archivo: str) -> str:
 
         ultimo_error = "Sin respuesta de Gemini"
         for modelo in MODEL_FALLBACKS:
-            for _ in range(2):
-                try:
-                    response = cliente.models.generate_content(
-                        model=modelo,
-                        contents=contenidos,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            response_schema=InstrumentoLegalSchema,
-                            temperature=0.05,
-                        ),
-                    )
-                    if response.text and response.text.strip():
-                        return response.text
-                except Exception as e_mod:
-                    ultimo_error = str(e_mod)
-                    if any(code in ultimo_error for code in ("429", "503", "UNAVAILABLE")):
-                        time.sleep(2)
-                        continue
-                    break
+            try:
+                response = cliente.models.generate_content(
+                    model=modelo,
+                    contents=contenidos,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=InstrumentoLegalSchema,
+                        temperature=0.05,
+                    ),
+                )
+                if response.text and response.text.strip():
+                    return response.text
+            except Exception as e_mod:
+                ultimo_error = str(e_mod)
+                if "429" in ultimo_error:
+                    time.sleep(1.5)
+                continue
         return json.dumps({"error": f"Fallo en procesamiento Gemini: {ultimo_error}"})
     except Exception as e:
         return json.dumps({"error": f"Fallo en procesamiento Gemini: {str(e)}"})
