@@ -1,80 +1,168 @@
-import docx
-from docx.shared import Inches, Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 import io
+import re
+from typing import Optional
 
-def generar_documento_protocolo_espanol(titulo: str, texto_redaccion: str, notario: str = "Ashly Brigeth Rodas Estrada") -> bytes:
+import docx
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.shared import Cm, Inches, Pt, RGBColor
+
+from modulos.notario_gt import dpi_a_letras, fecha_a_letras, normalizar_dpi
+
+
+def _limpiar_texto_protocolo(texto_redaccion: str) -> str:
     """
-    Genera un documento Word formateado rigurosamente para Papel Sellado Especial de Protocolo (Guatemala):
-    - 25 líneas exactas por página.
-    - Margen izquierdo ampliado a 4.0 cm para empaste protocolar.
-    - Interlineado exacto de 24 puntos.
-    - Tipografía Courier New o Times New Roman de 12 pt.
+    Prepara texto para Papel Sellado Especial para Protocolos (Art. 13 Código de Notariado):
+    - Elimina asteriscos/almohadillas Markdown.
+    - Expande marcadores [DPI: XXXXXXXXXXXXX] o DPI numéricos sin letras a formato letras + dígitos.
+    - Suprime renglones en blanco para evitar espacios vacíos entre líneas del protocolo.
+    """
+    limpio = str(texto_redaccion or "").replace("**", "").replace("__", "").strip()
+    limpio = re.sub(r"^#{1,6}\s+", "", limpio, flags=re.MULTILINE)
+
+    def _reemplazar_dpi_literal(match):
+        prefijo = match.group(1)
+        cui_raw = match.group(2)
+        cui = normalizar_dpi(cui_raw)
+        if len(cui) == 13:
+            return f"{prefijo} {dpi_a_letras(cui, incluir_digitos=True)}"
+        return match.group(0)
+
+    # Si aparece "DPI número 2456789010101" sin letras, lo expande automáticamente
+    limpio = re.sub(
+        r"(DPI\s*(?:número|no\.?|#|:)?)\s*(\d{4}[\s\-]?\d{5}[\s\-]?\d{4})(?!\s*\))",
+        _reemplazar_dpi_literal,
+        limpio,
+        flags=re.IGNORECASE,
+    )
+
+    lineas = [ln.strip() for ln in limpio.splitlines() if ln.strip()]
+    return " ".join(lineas) if len(lineas) <= 1 else "\n".join(lineas)
+
+
+def generar_documento_protocolo_espanol(titulo: str, texto_redaccion: str) -> bytes:
+    """
+    Genera documento en formato Papel Español / Papel Sellado Especial para Protocolos SAT
+    (Decreto 37-92 y Código de Notariado Decreto 314):
+    - Hoja Oficio Guatemala: 8.5" x 13.0" (21.59 cm x 33.02 cm)
+    - Caja de texto exacta para 25 líneas por cara a 24 pt de interlineado exacto (600 pt = 8.333"):
+      * Margen superior: 2.15" (encabezado escudo/registro SAT)
+      * Margen inferior: 2.52"
+      * Margen izquierdo: 4.0 cm (costura / empaste reglamentario)
+      * Margen derecho: 2.0 cm
+    - Tipografía: Courier New 11 pt, alineación justificada, cero líneas en blanco.
     """
     doc = docx.Document()
-    
+
+    normal_style = doc.styles["Normal"]
+    normal_style.font.name = "Courier New"
+    normal_style.font.size = Pt(11)
+
     for section in doc.sections:
-        # Márgenes legales de protocolo
-        section.top_margin = Inches(1.3)     # Espacio superior para el membrete oficial del papel SAT
-        section.bottom_margin = Inches(1.0)
-        section.left_margin = Inches(1.6)    # 4 cm aprox para margen de costura y empaste
-        section.right_margin = Inches(0.8)
-        
+        section.page_width = Inches(8.5)
+        section.page_height = Inches(13.0)
+        section.top_margin = Inches(2.15)
+        section.bottom_margin = Inches(2.52)
+        section.left_margin = Cm(4.0)
+        section.right_margin = Cm(2.0)
+        section.header_distance = Inches(0.5)
+        section.footer_distance = Inches(0.5)
+
+    cuerpo = _limpiar_texto_protocolo(texto_redaccion)
+
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
-    p.paragraph_format.line_spacing = Pt(24) # Calibrado para las 25 líneas reglamentarias
+    p.paragraph_format.line_spacing = Pt(24)
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(0)
-    
-    run = p.add_run(texto_redaccion)
-    run.font.name = "Courier New" # O Times New Roman
-    run.font.size = Pt(11.5)
-    run.font.color.rgb = RGBColor(15, 23, 42)
-    
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
+    p.paragraph_format.widow_control = False
+
+    run = p.add_run(cuerpo)
+    run.font.name = "Courier New"
+    run.font.size = Pt(11)
+    run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
 
 
-def generar_documento_memorial_judicial(titulo: str, texto_redaccion: str, juzgado: str = "JUZGADO DE PRIMERA INSTANCIA") -> bytes:
+def generar_documento_memorial_judicial(
+    titulo: str,
+    texto_redaccion: str,
+    juzgado_destino: str = "SEÑOR JUEZ DE PRIMERA INSTANCIA DEL RAMO CIVIL DEL DEPARTAMENTO DE GUATEMALA",
+    notario_abogado: str = "",
+    colegiado: str = "",
+    fecha_doc: Optional[object] = None,
+) -> bytes:
     """
-    Genera un memorial judicial profesional (Ramas Civil, Familiar o Penal)
-    listo para impresión y firma del abogado colegiado activo.
+    Genera memorial judicial conforme al Art. 61 del Código Procesal Civil y Mercantil (CPCyM)
+    y prácticas del Organismo Judicial de Guatemala:
+    - Hoja tamaño Oficio (8.5" x 13.0")
+    - Márgenes: Superior 1.2", Inferior 1.0", Izquierdo 3.8 cm (costura expediente), Derecho 2.5 cm
+    - Tipografía Times New Roman 12 pt, interlineado 1.5, justificado
+    - Fecha dinámica actual en letras y recordatorio de Timbre Forense Q. 1.00 por hoja (Dto. 82-96)
     """
     doc = docx.Document()
+
+    normal_style = doc.styles["Normal"]
+    normal_style.font.name = "Times New Roman"
+    normal_style.font.size = Pt(12)
+
     for section in doc.sections:
-        section.top_margin = Inches(1.0)
+        section.page_width = Inches(8.5)
+        section.page_height = Inches(13.0)
+        section.top_margin = Inches(1.2)
         section.bottom_margin = Inches(1.0)
-        section.left_margin = Inches(1.2)
-        section.right_margin = Inches(1.0)
-        
-    p_head = doc.add_paragraph()
-    r_head = p_head.add_run(juzgado.upper() + "\n")
-    r_head.bold = True
-    r_head.font.name = "Calibri"
-    r_head.font.size = Pt(11)
-    
-    p_body = doc.add_paragraph()
-    p_body.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    p_body.paragraph_format.line_spacing = 1.15
-    p_body.paragraph_format.space_after = Pt(6)
-    
-    r_body = p_body.add_run(texto_redaccion)
-    r_body.font.name = "Calibri"
-    r_body.font.size = Pt(10.5)
-    
+        section.left_margin = Cm(3.8)
+        section.right_margin = Cm(2.5)
+
+    p_enc = doc.add_paragraph()
+    p_enc.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    p_enc.paragraph_format.line_spacing = 1.15
+    p_enc.paragraph_format.space_after = Pt(12)
+    r_juz = p_enc.add_run(f"{str(juzgado_destino or '').upper()}\n")
+    r_juz.bold = True
+    r_juz.font.name = "Times New Roman"
+    r_juz.font.size = Pt(12)
+    if titulo:
+        r_ref = p_enc.add_run(f"REFERENCIA: {titulo.upper()}")
+        r_ref.bold = True
+        r_ref.font.name = "Times New Roman"
+        r_ref.font.size = Pt(11)
+
+    cuerpo = str(texto_redaccion or "").replace("**", "").strip()
+    bloques = [b.strip() for b in cuerpo.split("\n\n") if b.strip()]
+    if not bloques:
+        bloques = [cuerpo]
+
+    for bloque in bloques:
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.line_spacing = 1.5
+        p.paragraph_format.space_after = Pt(8)
+        r = p.add_run(bloque)
+        r.font.name = "Times New Roman"
+        r.font.size = Pt(12)
+
+    fecha_letras = fecha_a_letras(fecha_doc)
+    abogado_txt = notario_abogado.strip() if notario_abogado and notario_abogado.strip() else "____________________________________"
+    col_txt = f"Colegiado Activo No. {colegiado.strip()}" if colegiado and str(colegiado).strip() else "Colegiado Activo No. ________"
+
     p_pie = doc.add_paragraph()
-    p_pie.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p_pie.add_run(
-        "\n\nGuatemala, _____ de ____________________ del año dos mil veinticuatro.\n\n\n\n"
-        "____________________________________________\n"
-        "Firma del Presentante / Mandatario\n\n"
-        "EN SU AUXILIO Y DIRECCIÓN PROFESIONAL:\n\n\n\n"
-        "____________________________________________\n"
-        "Abogado y Notario — Colegiado Activo"
+    p_pie.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    p_pie.paragraph_format.line_spacing = 1.35
+    p_pie.paragraph_format.space_before = Pt(14)
+    r_pie = p_pie.add_run(
+        f"En la ciudad de Guatemala, el {fecha_letras}.\n\n\n"
+        f"A RUEGO DEL PRESENTADO QUIEN DE MOMENTO NO PUEDE FIRMAR Y EN SU AUXILIO, DIRECCIÓN Y PROCURACIÓN:\n\n\n"
+        f"f) {abogado_txt}\n"
+        f"Abogado y Notario — {col_txt}\n"
+        f"[Adherir e inutilizar Timbre Forense de Q. 1.00 por cada hoja — Art. 3 num. I Decreto 82-96]"
     )
-    
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
+    r_pie.font.name = "Times New Roman"
+    r_pie.font.size = Pt(11)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
