@@ -4,11 +4,10 @@ CATALOGO_PLANTILLAS = {
             "id": "not_compraventa",
             "nombre": "Compraventa de Bien Inmueble al Contado (Protocolo)",
             "soporte": "Protocolo (Art. 29, 38 y 45 Código de Notariado, Dto. 314; Art. 1790 Código Civil)",
-            "descripcion": "Escritura traslativa de dominio con comparecencia completa, DPI en letras, saneamiento de ley, advertencia fiscal/registral y cierre notarial.",
+            "descripcion": "Escritura traslativa de dominio con comparecencia completa, DPI y datos registrales en letras, saneamiento de ley, cierre notarial y ANTE MÍ.",
             "campos": [
                 "numero_escritura",
                 "lugar_y_fecha_letras",
-                "hora_letras",
                 "notario",
                 "vendedor_nombre",
                 "vendedor_edad_estado_prof_dom",
@@ -24,27 +23,27 @@ CATALOGO_PLANTILLAS = {
                 "monto_precio",
             ],
             "redaccion": (
-                "NÚMERO {numero_escritura}. En {lugar_y_fecha_letras}, siendo las {hora_letras}, "
-                "ANTE MÍ: {notario}, Notario, comparecen: por una parte, el señor {vendedor_nombre}, "
+                "NÚMERO {numero_escritura}. En {lugar_y_fecha_letras}, "
+                "ANTE MÍ: {notario}, Notario, comparecen: por una parte, {vendedor_nombre}, "
                 "{vendedor_edad_estado_prof_dom}, quien se identifica con el Documento Personal de Identificación "
                 "con Código Único de Identificación número {dpi_vendedor}, extendido por el Registro Nacional de las "
-                "Personas de la República de Guatemala; y por la otra parte, el señor {comprador_nombre}, "
+                "Personas de la República de Guatemala; y por la otra parte, {comprador_nombre}, "
                 "{comprador_edad_estado_prof_dom}, quien se identifica con el Documento Personal de Identificación "
                 "con Código Único de Identificación número {dpi_comprador}, extendido por el Registro Nacional de las "
                 "Personas de la República de Guatemala. Los comparecientes me aseguran hallarse en el libre ejercicio "
                 "de sus derechos civiles y que por el presente instrumento otorgan CONTRATO DE COMPRAVENTA DE BIEN INMUEBLE "
-                "AL CONTADO, de conformidad con las siguientes cláusulas: PRIMERA: Manifiesta el señor {vendedor_nombre}, "
-                "en lo sucesivo llamado El Vendedor, bajo juramento solemne prestado conforme a la ley y advertido por el "
+                "AL CONTADO, de conformidad con las siguientes cláusulas: PRIMERA: Manifiesta {vendedor_nombre}, "
+                "en lo sucesivo llamado La Parte Vendedora, bajo juramento solemne prestado conforme a la ley y advertido por el "
                 "infrascrito Notario de las penas relativas al delito de perjurio, que es legítimo propietario de la finca "
                 "rústica o urbana inscrita en el Registro General de la Propiedad bajo el número {finca}, folio {folio}, "
                 "del libro {libro} de {departamento_registro}, ubicada en {direccion_inmueble}, con las medidas, área "
-                "y colindancias que constan en su primera inscripción de dominio. SEGUNDA: Continúa manifestando El Vendedor "
+                "y colindancias que constan en su primera inscripción de dominio. SEGUNDA: Continúa manifestando La Parte Vendedora "
                 "que por el precio de {monto_precio}, que tiene por recibidos a su entera satisfacción al contado, VENDE, "
-                "CEDE Y TRASPASA a favor del señor {comprador_nombre} el bien inmueble identificado en la cláusula primera, "
-                "con todo cuanto de hecho y por derecho le corresponde al mismo. TERCERA: De manera expresa declara El "
-                "Vendedor que sobre el inmueble objeto de la presente compraventa no pesan gravámenes, anotaciones ni "
+                "CEDE Y TRASPASA a favor de {comprador_nombre} el bien inmueble identificado en la cláusula primera, "
+                "con todo cuanto de hecho y por derecho le corresponde al mismo. TERCERA: De manera expresa declara La Parte "
+                "Vendedora que sobre el inmueble objeto de la presente compraventa no pesan gravámenes, anotaciones ni "
                 "limitaciones que puedan perjudicar los derechos de la parte compradora, obligándose en todo caso al "
-                "saneamiento de ley. CUARTA: Por su parte manifiesta el señor {comprador_nombre} que en los términos "
+                "saneamiento de ley. CUARTA: Por su parte manifiesta {comprador_nombre} que en los términos "
                 "relacionados ACEPTA expresamente la venta que se le hace y se da por recibido del bien inmueble. "
                 "Yo, el Notario, DOY FE: a) Que todo lo escrito me fue expuesto; b) Que tuve a la vista los Documentos "
                 "Personales de Identificación relacionados y el título con que se acredita la propiedad del inmueble; "
@@ -52,18 +51,20 @@ CATALOGO_PLANTILLAS = {
                 "pago del impuesto fiscal o del Impuesto al Valor Agregado según corresponda, así como del registro del "
                 "testimonio respectivo y remisión de los avisos notariales de ley; y d) Que leí íntegramente lo escrito "
                 "a los otorgantes, quienes bien enterados de su contenido, objeto, validez y demás efectos legales, lo "
-                "ratifican, aceptan y firman juntamente con el Notario que autoriza."
+                "ratifican, aceptan y firman juntamente con el Notario que autoriza.\n"
+                "f) ____________________________    f) ____________________________\n"
+                "ANTE MÍ:\n"
+                "f) ____________________________  ({notario}, Notario)"
             ),
         },
         {
             "id": "not_mandato_general",
             "nombre": "Mandato General con Representación y Cláusula Especial (Protocolo)",
-            "soporte": "Protocolo (Art. 1686-1704 Código Civil; Art. 5 num. 8 Dto. 37-92)",
-            "descripcion": "Escritura de Mandato General con cláusula especial para enajenar o gravar, lista para Protocolo e inscripción en Registro Electrónico de Poderes.",
+            "soporte": "Protocolo (Art. 29 CDN; Art. 1686-1704 Código Civil; Art. 5 num. 8 Dto. 37-92)",
+            "descripcion": "Escritura de Mandato General con cláusula especial para enajenar o gravar, lista para Protocolo y Registro Electrónico de Poderes.",
             "campos": [
                 "numero_escritura",
                 "lugar_y_fecha_letras",
-                "hora_letras",
                 "notario",
                 "mandante_nombre",
                 "mandante_edad_estado_prof_dom",
@@ -75,18 +76,18 @@ CATALOGO_PLANTILLAS = {
                 "facultades_especiales",
             ],
             "redaccion": (
-                "NÚMERO {numero_escritura}. En {lugar_y_fecha_letras}, siendo las {hora_letras}, "
-                "ANTE MÍ: {notario}, Notario, comparece el señor {mandante_nombre}, {mandante_edad_estado_prof_dom}, "
+                "NÚMERO {numero_escritura}. En {lugar_y_fecha_letras}, "
+                "ANTE MÍ: {notario}, Notario, comparece {mandante_nombre}, {mandante_edad_estado_prof_dom}, "
                 "quien se identifica con el Documento Personal de Identificación con Código Único de Identificación "
                 "número {dpi_mandante}, extendido por el Registro Nacional de las Personas de la República de Guatemala. "
                 "El compareciente me asegura encontrarse en el libre ejercicio de sus derechos civiles y que por este acto "
                 "otorga MANDATO GENERAL CON REPRESENTACIÓN Y CLÁUSULA ESPECIAL, contenido en las cláusulas siguientes: "
-                "PRIMERA: Manifiesta el señor {mandante_nombre} que por este instrumento otorga MANDATO GENERAL CON "
+                "PRIMERA: Manifiesta {mandante_nombre} que por este instrumento otorga MANDATO GENERAL CON "
                 "REPRESENTACIÓN a favor de {mandatario_nombre} ({parentesco_o_calidad}), {mandatario_edad_estado_prof_dom}, "
                 "identificado con el Documento Personal de Identificación con Código Único de Identificación número "
                 "{dpi_mandatario}, para que en su nombre y representación administre todos sus bienes, derechos e intereses "
                 "en la República de Guatemala. SEGUNDA: Además de las facultades inherentes al mandato general, El Mandante "
-                "confiere CLÁUSULA ESPECIAL expresa al Mandatario conforme el Artículo mil seiscientos noventa y tres (1693) "
+                "confiere CLÁUSULA ESPECIAL expresa al Mandatario conforme el Artículo mil seiscientos noventa y tres "
                 "del Código Civil para que pueda: {facultades_especiales}, incluyendo vender, hipotecar, afianzar, transigir "
                 "y otorgar los instrumentos públicos necesarios. TERCERA: El presente mandato se ejerce de manera gratuita "
                 "o con la retribución que acuerden, obligándose el Mandatario a rendir cuentas de su gestión. Yo, el Notario, "
@@ -94,14 +95,17 @@ CATALOGO_PLANTILLAS = {
                 "del otorgante; c) Que advertí al otorgante de la obligación de inscribir el testimonio de la presente escritura "
                 "en el Registro Electrónico de Poderes del Archivo General de Protocolos y cubrir los timbres fiscales y "
                 "notariales de ley; y d) Que leí lo escrito al otorgante, quien enterado de su contenido, objeto, validez y "
-                "efectos legales, lo ratifica, acepta y firma."
+                "efectos legales, lo ratifica, acepta y firma.\n"
+                "f) ____________________________\n"
+                "ANTE MÍ:\n"
+                "f) ____________________________  ({notario}, Notario)"
             ),
         },
         {
             "id": "not_declaracion_jurada",
             "nombre": "Acta Notarial de Declaración Jurada (Papel Bond / Fuera de Protocolo)",
             "soporte": "Acta Notarial (Art. 60-62 Código de Notariado; Timbre Fiscal Q.0.50/hoja + Notarial Q.10.00)",
-            "descripcion": "Acta notarial bajo juramento solemne con advertencia de delito de perjurio (Art. 459 Código Penal).",
+            "descripcion": "Acta notarial bajo juramento solemne con advertencia de delito de perjurio (Art. 459 Código Penal), generada en formato de Acta Notarial.",
             "campos": [
                 "ciudad_y_fecha",
                 "hora_letras",
@@ -115,7 +119,7 @@ CATALOGO_PLANTILLAS = {
             ],
             "redaccion": (
                 "En {ciudad_y_fecha}, siendo las {hora_letras}, situado en mi oficina profesional ubicada en "
-                "{direccion_oficina}, YO: {notario}, Notario, soy requerido por el señor {requirente_nombre}, "
+                "{direccion_oficina}, YO: {notario}, Notario, soy requerido por {requirente_nombre}, "
                 "{requirente_generales}, quien se identifica con el Documento Personal de Identificación con Código "
                 "Único de Identificación número {dpi_requirente}, extendido por el Registro Nacional de las Personas de "
                 "la República de Guatemala, con el objeto de hacer constar DECLARACIÓN JURADA, procediéndose para el efecto "
@@ -124,29 +128,30 @@ CATALOGO_PLANTILLAS = {
                 "juramento solemne de ley, por lo que procedo a juramentarlo de la forma siguiente: ¿Prometéis bajo "
                 "juramento decir la verdad en lo que fuereis preguntado y manifestado?, a lo que responde: SÍ, BAJO "
                 "JURAMENTO PROMETO DECIR LA VERDAD; seguidamente le hice saber lo relativo a las penas que la ley "
-                "establece para el delito de perjurio.\n\n"
+                "establece para el delito de perjurio (Artículo cuatrocientos cincuenta y nueve del Código Penal).\n\n"
                 "SEGUNDO: Bajo el juramento prestado, declara libre y espontáneamente el requirente: {hechos_declarados}.\n\n"
                 "TERCERO: No habiendo más que hacer constar, se da por terminada la presente acta notarial en el mismo "
-                "lugar y fecha de su inicio, siendo las {hora_cierre}, la cual queda contenida en esta única hoja de "
-                "papel bond a la que se adhieren un timbre fiscal de cincuenta centavos de quetzal y un timbre notarial "
-                "de diez quetzales. Leo íntegramente lo escrito al requirente, quien enterado de su contenido, objeto, "
-                "validez y efectos legales, la acepta, ratifica y firma juntamente con el infrascrito Notario que de todo "
-                "lo actuado DOY FE."
+                "lugar y fecha de su inicio, siendo las {hora_cierre}, la cual queda contenida en las hojas útiles de "
+                "papel bond que se numeran, sellan y firman conforme al Artículo sesenta y dos del Código de Notariado, "
+                "adhiriéndose los timbres fiscales y notariales de ley. Leo íntegramente lo escrito al requirente, quien "
+                "enterado de su contenido, objeto, validez y efectos legales, la acepta, ratifica y firma juntamente con "
+                "el infrascrito Notario que de todo lo actuado DOY FE."
             ),
         },
         {
             "id": "not_arrendamiento",
             "nombre": "Contrato de Arrendamiento de Bien Inmueble (Protocolo)",
-            "soporte": "Protocolo (Art. 1880 Código Civil; Art. 29 Código de Notariado)",
-            "descripcion": "Escritura de arrendamiento con plazo, renta en letras, depósito, prohibiciones y rescisión.",
+            "soporte": "Protocolo (Art. 29 Código de Notariado; Art. 1880 Código Civil)",
+            "descripcion": "Escritura de arrendamiento con generales completos (Art. 29 num. 2), plazo y rentas en letras, advertencias legales y ANTE MÍ.",
             "campos": [
                 "numero_escritura",
                 "lugar_y_fecha_letras",
-                "hora_letras",
                 "notario",
                 "arrendante_nombre",
+                "arrendante_edad_estado_prof_dom",
                 "dpi_arrendante",
                 "arrendatario_nombre",
+                "arrendatario_edad_estado_prof_dom",
                 "dpi_arrendatario",
                 "direccion_inmueble",
                 "plazo_meses_letras",
@@ -154,37 +159,42 @@ CATALOGO_PLANTILLAS = {
                 "deposito_garantia",
             ],
             "redaccion": (
-                "NÚMERO {numero_escritura}. En {lugar_y_fecha_letras}, siendo las {hora_letras}, "
-                "ANTE MÍ: {notario}, Notario, comparecen: por una parte, el señor {arrendante_nombre}, mayor de edad, "
-                "guatemalteco, quien se identifica con Documento Personal de Identificación con Código Único de "
-                "Identificación número {dpi_arrendante}; y por la otra parte, el señor {arrendatario_nombre}, mayor "
-                "de edad, guatemalteco, quien se identifica con Documento Personal de Identificación con Código Único de "
-                "Identificación número {dpi_arrendatario}. Los comparecientes aseguran hallarse en el libre ejercicio "
-                "de sus derechos civiles y otorgan CONTRATO DE ARRENDAMIENTO DE BIEN INMUEBLE conforme las cláusulas "
-                "siguientes: PRIMERA: El señor {arrendante_nombre} da en arrendamiento al señor {arrendatario_nombre} el "
-                "inmueble ubicado en {direccion_inmueble}. SEGUNDA: El plazo del arrendamiento será de {plazo_meses_letras}, "
-                "pudiendo prorrogarse por cruce de cartas con treinta días de anticipación. TERCERA: La renta mensual "
-                "pactada es de {renta_mensual}, pagadera de forma anticipada dentro de los primeros cinco días de cada mes, "
-                "entregando en este acto en calidad de depósito de garantía la cantidad de {deposito_garantia}. CUARTA: "
-                "El inmueble será destinado exclusivamente para el uso convenido, quedando prohibido subarrendar total o "
-                "parcialmente sin consentimiento escrito del arrendante; la falta de pago de dos mensualidades consecutivas "
-                "dará derecho a dar por vencido el plazo y exigir la desocupación judicial. QUINTA: Ambos comparecientes "
-                "aceptan el contenido del presente instrumento. Yo, el Notario, DOY FE de todo lo expuesto, de haber "
-                "tenido a la vista los documentos de identificación relacionados y de haber leído lo escrito a los otorgantes, "
-                "quienes lo ratifican, aceptan y firman."
+                "NÚMERO {numero_escritura}. En {lugar_y_fecha_letras}, "
+                "ANTE MÍ: {notario}, Notario, comparecen: por una parte, {arrendante_nombre}, "
+                "{arrendante_edad_estado_prof_dom}, quien se identifica con Documento Personal de Identificación con Código "
+                "Único de Identificación número {dpi_arrendante}, extendido por el Registro Nacional de las Personas; y por "
+                "la otra parte, {arrendatario_nombre}, {arrendatario_edad_estado_prof_dom}, quien se identifica con Documento "
+                "Personal de Identificación con Código Único de Identificación número {dpi_arrendatario}, extendido por el "
+                "Registro Nacional de las Personas. Los comparecientes aseguran hallarse en el libre ejercicio de sus derechos "
+                "civiles y otorgan CONTRATO DE ARRENDAMIENTO DE BIEN INMUEBLE conforme las cláusulas siguientes: PRIMERA: "
+                "{arrendante_nombre} da en arrendamiento a {arrendatario_nombre} el inmueble ubicado en {direccion_inmueble}. "
+                "SEGUNDA: El plazo del arrendamiento será de {plazo_meses_letras}, pudiendo prorrogarse por cruce de cartas "
+                "con treinta días de anticipación. TERCERA: La renta mensual pactada es de {renta_mensual}, pagadera de forma "
+                "anticipada dentro de los primeros cinco días de cada mes, entregando en este acto en calidad de depósito de "
+                "garantía la cantidad de {deposito_garantia}. CUARTA: El inmueble será destinado exclusivamente para el uso "
+                "convenido, quedando prohibido subarrendar total o parcialmente sin consentimiento escrito del arrendante; "
+                "la falta de pago de dos mensualidades consecutivas dará derecho a dar por vencido el plazo y exigir la "
+                "desocupación judicial. QUINTA: Ambos comparecientes aceptan el contenido del presente instrumento. Yo, el "
+                "Notario, DOY FE: a) De todo lo expuesto; b) De haber tenido a la vista los documentos de identificación "
+                "relacionados; c) De haber advertido a los otorgantes los efectos legales, fiscales y registrales cuando "
+                "corresponda; y d) De haber leído íntegramente lo escrito a los otorgantes, quienes enterados de su contenido, "
+                "objeto, validez y efectos legales, lo ratifican, aceptan y firman.\n"
+                "f) ____________________________    f) ____________________________\n"
+                "ANTE MÍ:\n"
+                "f) ____________________________  ({notario}, Notario)"
             ),
         },
         {
             "id": "not_carta_pago",
             "nombre": "Carta Total de Pago y Liberación de Hipoteca (Protocolo)",
-            "soporte": "Protocolo (Art. 841 Código Civil; Exenta de Timbre Fiscal Art. 11 Dto. 37-92)",
-            "descripcion": "Escritura unilateral otorgada por acreedor declarando solvente la obligación y solicitando cancelación de hipoteca en el RGP.",
+            "soporte": "Protocolo (Art. 29 CDN; Art. 841 Código Civil)",
+            "descripcion": "Escritura unilateral con generales completos (Art. 29 num. 2), departamento RGP, solicitud de cancelación de hipoteca y ANTE MÍ.",
             "campos": [
                 "numero_escritura",
                 "lugar_y_fecha_letras",
-                "hora_letras",
                 "notario",
                 "acreedor_nombre",
+                "acreedor_edad_estado_prof_dom",
                 "dpi_acreedor",
                 "deudor_nombre",
                 "escritura_origen_num",
@@ -193,23 +203,30 @@ CATALOGO_PLANTILLAS = {
                 "finca",
                 "folio",
                 "libro",
+                "departamento_registro",
                 "monto_pagado",
             ],
             "redaccion": (
-                "NÚMERO {numero_escritura}. En {lugar_y_fecha_letras}, siendo las {hora_letras}, "
-                "ANTE MÍ: {notario}, Notario, comparece el señor {acreedor_nombre}, mayor de edad, guatemalteco, quien "
+                "NÚMERO {numero_escritura}. En {lugar_y_fecha_letras}, "
+                "ANTE MÍ: {notario}, Notario, comparece {acreedor_nombre}, {acreedor_edad_estado_prof_dom}, quien "
                 "se identifica con Documento Personal de Identificación con Código Único de Identificación número "
-                "{dpi_acreedor}. El compareciente asegura encontrarse en el libre ejercicio de sus derechos civiles y "
-                "otorga CARTA TOTAL DE PAGO Y LIBERACIÓN DE GRAVAMEN HIPOTECARIO, bajo las siguientes cláusulas: PRIMERA: "
-                "Manifiesta el otorgante que mediante escritura pública número {escritura_origen_num}, autorizada en "
-                "esta ciudad el {fecha_origen} ante los oficios del Notario {notario_origen}, concedió mutuo con garantía "
-                "hipotecaria al señor {deudor_nombre} por la suma de {monto_pagado}, garantizado con hipoteca inscrita sobre "
-                "la finca número {finca}, folio {folio}, libro {libro}. SEGUNDA: Declara expresamente el otorgante que a "
-                "la presente fecha el deudor le ha cancelado totalmente capital e intereses pactados, sin que quede saldo "
-                "alguno pendiente, por lo que otorga la más eficaz y total CARTA DE PAGO y solicita al Registrador General "
-                "de la Propiedad se sirva cancelar totalmente la inscripción hipotecaria que pesa sobre la finca descrita. "
-                "Yo, el Notario, DOY FE de todo lo expuesto, de haber tenido a la vista el documento de identificación y "
-                "de haber leído lo escrito al otorgante, quien enterado de su contenido y efectos legales lo ratifica, acepta y firma."
+                "{dpi_acreedor}, extendido por el Registro Nacional de las Personas de la República de Guatemala. "
+                "El compareciente asegura encontrarse en el libre ejercicio de sus derechos civiles y otorga CARTA TOTAL DE "
+                "PAGO Y LIBERACIÓN DE GRAVAMEN HIPOTECARIO, bajo las siguientes cláusulas: PRIMERA: Manifiesta el otorgante "
+                "que mediante escritura pública número {escritura_origen_num}, autorizada el {fecha_origen} ante los oficios "
+                "del Notario {notario_origen}, concedió mutuo con garantía hipotecaria a {deudor_nombre} por la suma de "
+                "{monto_pagado}, garantizado con hipoteca inscrita sobre la finca número {finca}, folio {folio}, libro {libro} "
+                "de {departamento_registro}. SEGUNDA: Declara expresamente el otorgante que a la presente fecha el deudor le "
+                "ha cancelado totalmente capital e intereses pactados, sin que quede saldo alguno pendiente, por lo que otorga "
+                "la más eficaz y total CARTA DE PAGO y solicita al Registrador General de la Propiedad se sirva cancelar "
+                "totalmente la inscripción hipotecaria que pesa sobre la finca descrita. Yo, el Notario, DOY FE: a) De todo "
+                "lo expuesto; b) De haber tenido a la vista el documento de identificación relacionado; c) De haber advertido "
+                "al otorgante los efectos legales y la obligación de inscribir el testimonio respectivo en el Registro General "
+                "de la Propiedad; y d) De haber leído lo escrito al otorgante, quien enterado de su contenido y efectos "
+                "legales lo ratifica, acepta y firma.\n"
+                "f) ____________________________\n"
+                "ANTE MÍ:\n"
+                "f) ____________________________  ({notario}, Notario)"
             ),
         },
     ],
@@ -217,7 +234,7 @@ CATALOGO_PLANTILLAS = {
         {
             "id": "civ_demanda_ejecutiva",
             "nombre": "Demanda de Juicio Ejecutivo Común (Título Ejecutivo)",
-            "soporte": "Memorial Judicial (Art. 61, 106, 327 y ss. Código Procesal Civil y Mercantil)",
+            "soporte": "Memorial Judicial (Art. 61, 63, 106, 327 y ss. Código Procesal Civil y Mercantil)",
             "descripcion": "Memorial inicial ejecutivo con hechos, fundamento de derecho, pruebas, peticiones de mandamiento de ejecución y embargo.",
             "campos": [
                 "juzgado",
@@ -267,11 +284,12 @@ CATALOGO_PLANTILLAS = {
         {
             "id": "civ_sumario_desahucio",
             "nombre": "Demanda Sumaria de Desocupación y Cobro de Rentas",
-            "soporte": "Memorial Judicial (Art. 229 num. 1 y 237-243 CPCyM)",
-            "descripcion": "Demanda en vía sumaria por vencimiento de plazo o falta de pago de arrendamiento.",
+            "soporte": "Memorial Judicial (Art. 61, 63, 229 num. 1 y 237-243 CPCyM)",
+            "descripcion": "Demanda en vía sumaria con generales Art. 61 num. 2, casillero electrónico y copias de ley.",
             "campos": [
                 "juzgado",
                 "actor_nombre",
+                "actor_generales",
                 "dpi_actor",
                 "abogado_auxiliante",
                 "casillero_electronico",
@@ -282,7 +300,7 @@ CATALOGO_PLANTILLAS = {
             ],
             "redaccion": (
                 "JUICIO SUMARIO DE DESOCUPACIÓN Y COBRO DE RENTAS NUEVO.\n\n"
-                "{actor_nombre}, mayor de edad, guatemalteco, identificado con DPI con CUI número {dpi_actor}, bajo la dirección "
+                "{actor_nombre}, {actor_generales}, identificado con DPI con CUI número {dpi_actor}, bajo la dirección "
                 "y procuración del Abogado {abogado_auxiliante}, señalando casillero electrónico {casillero_electronico}, ante "
                 "usted comparezco a promover JUICIO SUMARIO DE DESOCUPACIÓN Y COBRO DE RENTAS ATRASADAS en contra de "
                 "{inquilino_nombre}, quien puede ser notificado en el propio inmueble arrendado ubicado en {direccion_inmueble}, "
@@ -299,17 +317,18 @@ CATALOGO_PLANTILLAS = {
                 "si no se opusiere se ordenará la desocupación sin más trámite; DE FONDO: En sentencia declarar con lugar "
                 "la desocupación fijando el plazo de ley para desalojar bajo apercibimiento de lanzamiento a su costa, más el "
                 "pago de {monto_adeudado} y costas.\n\n"
-                "CITA DE LEYES: Artículos 61, 106, 229, 230, 237, 238, 240 y 241 del Código Procesal Civil y Mercantil."
+                "CITA DE LEYES: Artículos 61, 63, 106, 229, 230, 237, 238, 240 y 241 del CPCyM. Acompaño duplicado y dos copias."
             ),
         },
         {
             "id": "civ_ejecutivo_cambiario",
             "nombre": "Acción Cambiaria en Vía Directa (Pagaré / Cheque / Letra)",
-            "soporte": "Memorial Judicial (Art. 615-630 Código de Comercio; Art. 327 CPCyM)",
-            "descripcion": "Demanda ejecutiva mercantil basada en título de crédito protestado o exento de protesto.",
+            "soporte": "Memorial Judicial (Art. 615-630 Código de Comercio; Art. 61, 63 y 327 CPCyM)",
+            "descripcion": "Demanda ejecutiva mercantil basada en título de crédito con generales completos y copias.",
             "campos": [
                 "juzgado",
                 "actor_nombre",
+                "actor_generales",
                 "dpi_actor",
                 "abogado_auxiliante",
                 "casillero_electronico",
@@ -321,7 +340,7 @@ CATALOGO_PLANTILLAS = {
             ],
             "redaccion": (
                 "JUICIO EJECUTIVO EN EJERCICIO DE LA ACCIÓN CAMBIARIA NUEVO.\n\n"
-                "{actor_nombre}, identificado con DPI con CUI número {dpi_actor}, bajo la dirección y procuración del Abogado "
+                "{actor_nombre}, {actor_generales}, identificado con DPI con CUI número {dpi_actor}, bajo la dirección y procuración del Abogado "
                 "{abogado_auxiliante} y casillero electrónico {casillero_electronico}, promuevo JUICIO EJECUTIVO en ejercicio "
                 "de la ACCIÓN CAMBIARIA EN VÍA DIRECTA contra {deudor_nombre}, notificable en {direccion_deudor}:\n\n"
                 "I. HECHOS: El demandado libró o aceptó a mi favor el título de crédito consistente en {titulo_credito_tipo_y_numero}, "
@@ -329,13 +348,13 @@ CATALOGO_PLANTILLAS = {
                 "II. FUNDAMENTO DE DERECHO: Artículos 615, 616, 621 y 630 del Código de Comercio y 327 del CPCyM.\n\n"
                 "III. PETICIÓN: Se despache mandamiento de ejecución y embargo sobre bienes del demandado por la suma de "
                 "{monto_titulo}, intereses moratorios y costas procesales; en sentencia, se declare con lugar la acción cambiaria.\n\n"
-                "CITA DE LEYES: Artículos 615 al 630 del Código de Comercio; 61, 106, 327, 329 y 331 del CPCyM."
+                "CITA DE LEYES: Artículos 615 al 630 del Código de Comercio; 61, 63, 106, 327, 329 y 331 del CPCyM. Acompaño duplicado y dos copias."
             ),
         },
         {
             "id": "civ_ampliacion_o_memorial_simple",
             "nombre": "Memorial de Evacuación de Audiencia / Subsanación de Previos",
-            "soporte": "Memorial Judicial (Art. 61 y 109 Código Procesal Civil y Mercantil)",
+            "soporte": "Memorial Judicial (Art. 61, 63 y 109 Código Procesal Civil y Mercantil)",
             "descripcion": "Escrito de trámite para cumplir previos o evacuar audiencia dentro de proceso iniciado.",
             "campos": [
                 "juzgado",
@@ -358,18 +377,19 @@ CATALOGO_PLANTILLAS = {
                 "PETICIÓN:\n"
                 "1) Se incorpore a sus antecedentes el presente memorial; 2) Se tenga por evacuada en tiempo la audiencia o por "
                 "cumplidos los requisitos previos ordenados, continuándose el trámite que en derecho corresponde.\n\n"
-                "CITA DE LEYES: Artículos 28 de la Constitución Política de la República; 61, 62, 66, 79 y 109 del CPCyM. "
+                "CITA DE LEYES: Artículos 28 de la Constitución Política de la República; 61, 62, 63, 66, 79 y 109 del CPCyM. "
                 "Acompaño duplicado y copias de ley."
             ),
         },
         {
             "id": "civ_voluntario_cambio_nombre",
             "nombre": "Diligencias Voluntarias Judiciales de Cambio de Nombre",
-            "soporte": "Memorial Judicial (Art. 438-439 CPCyM; Dto. 54-77 si es vía notarial)",
+            "soporte": "Memorial Judicial (Art. 61, 63, 438-439 CPCyM; Dto. 54-77 si es vía notarial)",
             "descripcion": "Escrito inicial ante Juez de Primera Instancia Civil para autorización de cambio de nombre.",
             "campos": [
                 "juzgado",
                 "solicitante_nombre_actual",
+                "solicitante_generales",
                 "dpi_solicitante",
                 "abogado_auxiliante",
                 "casillero_electronico",
@@ -378,7 +398,7 @@ CATALOGO_PLANTILLAS = {
             ],
             "redaccion": (
                 "DILIGENCIAS VOLUNTARIAS JUDICIALES DE CAMBIO DE NOMBRE NUEVO.\n\n"
-                "{solicitante_nombre_actual}, identificado con DPI con CUI número {dpi_solicitante}, bajo la dirección y "
+                "{solicitante_nombre_actual}, {solicitante_generales}, identificado con DPI con CUI número {dpi_solicitante}, bajo la dirección y "
                 "procuración del Abogado {abogado_auxiliante}, casillero electrónico {casillero_electronico}, ante usted "
                 "promuevo DILIGENCIAS VOLUNTARIAS DE CAMBIO DE NOMBRE:\n\n"
                 "I. HECHOS: Mi nacimiento se encuentra inscrito en el Registro Civil de las Personas del RENAP bajo el nombre "
@@ -388,7 +408,7 @@ CATALOGO_PLANTILLAS = {
                 "III. PETICIONES: Se reciban los documentos probatorios (certificación de nacimiento, antecedentes penales y "
                 "policíacos), se publiquen los edictos en el Diario Oficial por tres veces durante treinta días, y sin oposición "
                 "se dicte auto declarando con lugar el cambio de nombre e inscribiéndose en RENAP.\n\n"
-                "CITA DE LEYES: Artículos 6 y 7 del Código Civil; 401, 402, 438 y 439 del CPCyM."
+                "CITA DE LEYES: Artículos 6 y 7 del Código Civil; 61, 63, 401, 402, 438 y 439 del CPCyM. Acompaño duplicado y dos copias."
             ),
         },
     ],
@@ -396,11 +416,12 @@ CATALOGO_PLANTILLAS = {
         {
             "id": "fam_fijacion_alimentos",
             "nombre": "Demanda Oral de Fijación de Pensión Alimenticia y Pensión Provisional",
-            "soporte": "Memorial Judicial (Art. 199-216 CPCyM; Ley de Tribunales de Familia)",
-            "descripcion": "Demanda en juicio oral de familia con solicitud urgente de pensión provisional y arraigo.",
+            "soporte": "Memorial Judicial (Art. 61, 63, 199-216 CPCyM; Ley de Tribunales de Familia)",
+            "descripcion": "Demanda en juicio oral de familia con generales Art. 61, pensión provisional y arraigo.",
             "campos": [
                 "juzgado_familia",
                 "madre_o_actora",
+                "actora_generales",
                 "dpi_actora",
                 "menores_beneficiarios",
                 "abogado_auxiliante",
@@ -411,7 +432,7 @@ CATALOGO_PLANTILLAS = {
             ],
             "redaccion": (
                 "JUICIO ORAL DE FIJACIÓN DE PENSIÓN ALIMENTICIA NUEVO.\n\n"
-                "{madre_o_actora}, identificada con DPI con CUI número {dpi_actora}, actuando en nombre propio y en "
+                "{madre_o_actora}, {actora_generales}, identificada con DPI con CUI número {dpi_actora}, actuando en nombre propio y en "
                 "representación legal de mis menores hijos {menores_beneficiarios}, bajo dirección y procuración del Abogado "
                 "{abogado_auxiliante}, casillero electrónico {casillero_electronico}, promuevo JUICIO ORAL DE FIJACIÓN DE "
                 "PENSIÓN ALIMENTICIA en contra de {demandado_nombre}, notificable en {direccion_demandado}:\n\n"
@@ -423,19 +444,22 @@ CATALOGO_PLANTILLAS = {
                 "y declararse confeso al demandado si no comparece; 2) Con carácter urgente se fije PENSIÓN PROVISIONAL por la "
                 "cantidad de {pension_solicitada} y se decrete medida precautoria de arraigo contra el demandado. DE FONDO: En "
                 "sentencia se fije pensión alimenticia definitiva garantizada conforme la ley.\n\n"
-                "CITA DE LEYES: Artículos 51 y 55 de la Constitución; 278-292 del Código Civil; 61, 199, 212, 213, 214 y 215 del CPCyM."
+                "CITA DE LEYES: Artículos 51 y 55 de la Constitución; 278-292 del Código Civil; 61, 63, 199, 212, 213, 214 y 215 del CPCyM. "
+                "Acompaño duplicado y dos copias."
             ),
         },
         {
             "id": "fam_divorcio_mutuo",
             "nombre": "Solicitud Voluntaria de Divorcio por Mutuo Consentimiento",
-            "soporte": "Memorial Judicial (Art. 153-163 Código Civil; Art. 426-433 CPCyM)",
-            "descripcion": "Memorial conjunto con proyecto de bases de divorcio sobre patria potestad, alimentos y patrimonio.",
+            "soporte": "Memorial Judicial (Art. 153-163 Código Civil; Art. 61, 63, 426-433 CPCyM)",
+            "descripcion": "Memorial conjunto con generales completos, proyecto de bases de divorcio y copias de ley.",
             "campos": [
                 "juzgado_familia",
                 "conyuge_1",
+                "generales_conyuge_1",
                 "dpi_conyuge_1",
                 "conyuge_2",
+                "generales_conyuge_2",
                 "dpi_conyuge_2",
                 "abogado_auxiliante",
                 "casillero_electronico",
@@ -444,54 +468,60 @@ CATALOGO_PLANTILLAS = {
             ],
             "redaccion": (
                 "DILIGENCIAS VOLUNTARIAS DE DIVORCIO POR MUTUO CONSENTIMIENTO.\n\n"
-                "{conyuge_1}, con DPI CUI {dpi_conyuge_1}, y {conyuge_2}, con DPI CUI {dpi_conyuge_2}, bajo la dirección del "
-                "Abogado {abogado_auxiliante}, casillero electrónico {casillero_electronico}, comparecemos voluntariamente:\n\n"
+                "{conyuge_1}, {generales_conyuge_1}, con DPI CUI {dpi_conyuge_1}, y {conyuge_2}, {generales_conyuge_2}, "
+                "con DPI CUI {dpi_conyuge_2}, bajo la dirección del Abogado {abogado_auxiliante}, casillero electrónico "
+                "{casillero_electronico}, comparecemos voluntariamente:\n\n"
                 "I. HECHOS: Contrajimos matrimonio civil el {fecha_matrimonio} ante el Registro Civil del RENAP. Por mutuo "
                 "acuerdo hemos decidido disolver el vínculo conyugal presentando las siguientes BASES DEL CONVENIO DE DIVORCIO:\n"
                 "{bases_convenio}\n\n"
                 "II. FUNDAMENTO DE DERECHO: Artículos 153, 154 numeral 1o. y 163 del Código Civil; 426 al 431 del CPCyM.\n\n"
                 "III. PETICIÓN: Se señale junta conciliatoria de ley, se apruebe el proyecto de convenio de bases y en sentencia "
                 "se declare disuelto nuestro matrimonio civil librando certificación al RENAP.\n\n"
-                "CITA DE LEYES: Artículos 153-163 del Código Civil; 426-433 del CPCyM."
+                "CITA DE LEYES: Artículos 153-163 del Código Civil; 61, 63 y 426-433 del CPCyM. Acompañamos duplicado y dos copias."
             ),
         },
         {
             "id": "fam_ejecutivo_alimentos",
             "nombre": "Juicio Ejecutivo en Vía de Apremio por Pensiones Atrasadas",
-            "soporte": "Memorial Judicial (Art. 294 CPCyM; Art. 242 Código Penal - Negación de Asistencia Económica)",
-            "descripcion": "Ejecución directa en vía de apremio con liquidación de pensiones vencidas y certificación a MP.",
+            "soporte": "Memorial Judicial (Art. 61, 63, 294 CPCyM; Art. 242 Código Penal)",
+            "descripcion": "Ejecución directa en vía de apremio con liquidación de pensiones vencidas, casillero y certificación a MP.",
             "campos": [
                 "juzgado_familia",
                 "numero_expediente_familia",
                 "ejecutante_nombre",
+                "ejecutante_generales",
                 "dpi_ejecutante",
                 "abogado_auxiliante",
+                "casillero_electronico",
                 "ejecutado_nombre",
                 "meses_atrasados",
                 "total_adeudado",
             ],
             "redaccion": (
                 "EJECUCIÓN EN VÍA DE APREMIO — EXPEDIENTE REF.: {numero_expediente_familia}.\n\n"
-                "{ejecutante_nombre}, identificada con DPI CUI {dpi_ejecutante}, bajo dirección del Abogado {abogado_auxiliante}, "
-                "comparezco a promover EJECUCIÓN EN VÍA DE APREMIO en contra de {ejecutado_nombre}:\n\n"
+                "{ejecutante_nombre}, {ejecutante_generales}, identificada con DPI CUI {dpi_ejecutante}, bajo dirección del "
+                "Abogado {abogado_auxiliante}, señalando casillero electrónico {casillero_electronico}, comparezco a promover "
+                "EJECUCIÓN EN VÍA DE APREMIO en contra de {ejecutado_nombre}:\n\n"
                 "I. HECHOS: En virtud de sentencia o convenio aprobado en autos, el ejecutado está obligado a pagar pensión "
                 "alimenticia, encontrándose insolutas {meses_atrasados}, sumando la cantidad líquida y exigible de {total_adeudado}.\n\n"
                 "II. PETICIONES: Se requiera de pago al ejecutado por {total_adeudado}; de no hacer efectivo el pago en el acto, "
                 "se trabe embargo y, de persistir la negativa al quinto día, se certifique lo conducente al Ministerio Público "
                 "por el delito de Negación de Asistencia Económica (Art. 242 del Código Penal).\n\n"
-                "CITA DE LEYES: Artículos 294, 297 y 298 del CPCyM; Artículo 242 del Código Penal."
+                "CITA DE LEYES: Artículos 61, 63, 294, 297 y 298 del CPCyM; Artículo 242 del Código Penal. Acompaño duplicado y dos copias."
             ),
         },
         {
             "id": "fam_relaciones_familiares",
             "nombre": "Demanda Oral de Fijación de Régimen de Relación y Convivencia Familiar",
-            "soporte": "Memorial Judicial (Art. 199 CPCyM; Ley de Tribunales de Familia)",
+            "soporte": "Memorial Judicial (Art. 61, 63, 199 CPCyM; Ley de Tribunales de Familia)",
             "descripcion": "Solicitud para regular días, horarios y vacaciones de convivencia con hijos menores.",
             "campos": [
                 "juzgado_familia",
                 "actor_nombre",
+                "actor_generales",
                 "dpi_actor",
                 "abogado_auxiliante",
+                "casillero_electronico",
                 "demandado_nombre",
                 "direccion_demandado",
                 "menores_nombres",
@@ -499,13 +529,14 @@ CATALOGO_PLANTILLAS = {
             ],
             "redaccion": (
                 "JUICIO ORAL DE RELACIONES FAMILIARES NUEVO.\n\n"
-                "{actor_nombre}, con DPI CUI {dpi_actor}, bajo dirección del Abogado {abogado_auxiliante}, promuevo JUICIO ORAL "
-                "DE FIJACIÓN DE RELACIONES FAMILIARES contra {demandado_nombre}, notificable en {direccion_demandado}:\n\n"
+                "{actor_nombre}, {actor_generales}, con DPI CUI {dpi_actor}, bajo dirección del Abogado {abogado_auxiliante}, "
+                "casillero electrónico {casillero_electronico}, promuevo JUICIO ORAL DE FIJACIÓN DE RELACIONES FAMILIARES contra "
+                "{demandado_nombre}, notificable en {direccion_demandado}:\n\n"
                 "I. HECHOS: Soy padre o madre de los menores {menores_nombres}, a quienes se me ha limitado la convivencia regular, "
                 "afectando su desarrollo afectivo. Propongo el siguiente régimen de visitas: {horario_propuesto}.\n\n"
                 "II. PETICIÓN: Se fije régimen provisional inmediato durante el trámite y en sentencia se apruebe de forma "
                 "definitiva en resguardo del interés superior del niño.\n\n"
-                "CITA DE LEYES: Artículos 199 del CPCyM; Convención sobre los Derechos del Niño; Ley PINA."
+                "CITA DE LEYES: Artículos 61, 63 y 199 del CPCyM; Convención sobre los Derechos del Niño; Ley PINA. Acompaño duplicado y dos copias."
             ),
         },
         {
@@ -516,6 +547,7 @@ CATALOGO_PLANTILLAS = {
             "campos": [
                 "juzgado_familia",
                 "solicitante_nombre",
+                "solicitante_generales",
                 "dpi_solicitante",
                 "direccion_solicitante",
                 "agresor_nombre",
@@ -524,13 +556,14 @@ CATALOGO_PLANTILLAS = {
             ],
             "redaccion": (
                 "SOLICITUD URGENTE DE MEDIDAS DE SEGURIDAD POR VIOLENCIA INTRAFAMILIAR.\n\n"
-                "{solicitante_nombre}, identificada con DPI CUI {dpi_solicitante}, domiciliada en {direccion_solicitante}, "
-                "comparezco con urgencia a solicitar MEDIDAS DE SEGURIDAD en contra de {agresor_nombre}:\n\n"
+                "{solicitante_nombre}, {solicitante_generales}, identificada con DPI CUI {dpi_solicitante}, señalando lugar "
+                "para recibir notificaciones en {direccion_solicitante}, comparezco con urgencia a solicitar MEDIDAS DE "
+                "SEGURIDAD en contra de {agresor_nombre}:\n\n"
                 "I. HECHOS URGENTES: {hechos_urgentes}.\n\n"
                 "II. PETICIÓN URGENTE: Con fundamento en el Artículo 7 del Decreto 97-96, sin audiencia previa, se decreten "
                 "de manera inmediata las siguientes medidas: {medidas_solicitadas}, ordenándose librar oficio a la Comisaría "
                 "de la Policía Nacional Civil para protección inmediata de mi vida e integridad y la de mi núcleo familiar.\n\n"
-                "CITA DE LEYES: Decreto 97-96 y Decreto 22-2008 del Congreso de la República."
+                "CITA DE LEYES: Decreto 97-96 y Decreto 22-2008 del Congreso de la República. Acompaño duplicado y copias."
             ),
         },
     ],
@@ -538,8 +571,8 @@ CATALOGO_PLANTILLAS = {
         {
             "id": "pen_denuncia_mp",
             "nombre": "Denuncia Escrita ante el Ministerio Público (Art. 297-299 CPP)",
-            "soporte": "Memorial / Denuncia Penal (Art. 297-299 Código Procesal Penal, Dto. 51-92)",
-            "descripcion": "Denuncia formal dirigida al Ministerio Público con narración circunstanciada de hechos e indicios.",
+            "soporte": "Denuncia MP (Art. 297-299 Código Procesal Penal, Dto. 51-92)",
+            "descripcion": "Denuncia formal dirigida al Ministerio Público (sin encabezado judicial duplicado ni Timbre Forense).",
             "campos": [
                 "juzgado",
                 "denunciante_nombre",
@@ -552,10 +585,10 @@ CATALOGO_PLANTILLAS = {
                 "relato_hechos",
             ],
             "redaccion": (
-                "SEÑORA / SEÑOR FISCAL GENERAL Y JEFE DEL MINISTERIO PÚBLICO / FISCALÍA DISTRITAL CORRESPONDIENTE.\n\n"
                 "{denunciante_nombre}, mayor de edad, guatemalteco, identificado con DPI CUI {dpi_denunciante}, con residencia "
-                "en {direccion_denunciante}, auxiliado por el Abogado {abogado_auxiliante}, respetuosamente presento "
-                "DENUNCIA PENAL en contra de {posible_sindico}, por la posible comisión del delito de {delito_presunto}:\n\n"
+                "y lugar para notificaciones en {direccion_denunciante}, auxiliado (opcional) por {abogado_auxiliante}, "
+                "respetuosamente presento DENUNCIA PENAL en contra de {posible_sindico}, por la posible comisión del delito "
+                "de {delito_presunto}:\n\n"
                 "I. RELATO CIRCUNSTANCIADO DE LOS HECHOS:\n"
                 "El día y lugar siguiente: {fecha_y_lugar_hecho}, acontecieron los hechos constitutivos de ilícito penal: "
                 "{relato_hechos}.\n\n"
@@ -649,7 +682,7 @@ CATALOGO_PLANTILLAS = {
             "id": "pen_exhibicion_personal",
             "nombre": "Recurso Constitucional de Exhibición Personal (Habeas Corpus)",
             "soporte": "Acción Constitucional (Art. 263 Constitución Política; Art. 82-113 Ley de Amparo, Dto. 1-86)",
-            "descripcion": "Acción constitucional urgente contra detención ilegal o vejámenes.",
+            "descripcion": "Acción constitucional urgente exenta de formalidades, auxilio de abogado y Timbre Forense (Art. 85 Dto. 1-86).",
             "campos": [
                 "juzgado_penal",
                 "solicitante_nombre",

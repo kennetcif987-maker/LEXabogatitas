@@ -4,6 +4,14 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 
+_TZ_GUATEMALA = datetime.timezone(datetime.timedelta(hours=-6))
+
+_MUNICIPIOS_POR_DEPTO_GT: Dict[int, int] = {
+    1: 17, 2: 8, 3: 16, 4: 16, 5: 14, 6: 14, 7: 19, 8: 8,
+    9: 24, 10: 21, 11: 9, 12: 30, 13: 33, 14: 21, 15: 8,
+    16: 17, 17: 14, 18: 5, 19: 11, 20: 11, 21: 7, 22: 17,
+}
+
 _UNIDADES = (
     "cero",
     "uno",
@@ -78,12 +86,35 @@ _MESES_ES = {
 }
 
 PLAZOS_NOTARIALES_GT: Dict[str, str] = {
-    "DICABI": "15 días hábiles siguientes a la autorización o registro (Art. 38 Código de Notariado, Dto. 314)",
+    "DICABI": "15 días hábiles siguientes a la autorización o registro (Art. 38 Código de Notariado, Dto. 314; Art. 43 Ley del IUSI, Dto. 15-98)",
     "TESTIMONIO_ESPECIAL": "25 días hábiles siguientes al otorgamiento de la escritura (Art. 37 literal a, Dto. 314)",
     "AVISO_TRIMESTRAL": "25 días hábiles siguientes al vencimiento de cada trimestre del año calendario (Art. 37 literal c, Dto. 314)",
     "AVISO_CANCELACION": "25 días hábiles siguientes a la fecha de cancelación del instrumento (Art. 37 literal b, Dto. 314)",
-    "MATRIMONIO_RENAP": "15 días hábiles siguientes a la celebración del matrimonio civil (Art. 102 Código Civil, Dto. Ley 106)",
+    "MATRIMONIO_RENAP": "15 días hábiles siguientes a la celebración (Art. 102 Código Civil, Dto. Ley 106; hasta 30 días hábiles Art. 84 Ley del RENAP, Dto. 90-2005)",
 }
+
+
+def ahora_gt() -> datetime.datetime:
+    """Fecha y hora actual en zona horaria oficial de Guatemala (UTC-6)."""
+    return datetime.datetime.now(_TZ_GUATEMALA)
+
+
+def hoy_gt() -> datetime.date:
+    """Fecha actual en zona horaria oficial de Guatemala (UTC-6)."""
+    return ahora_gt().date()
+
+
+def limpiar_texto_xml(texto: object) -> str:
+    """Elimina caracteres de control ilegales en XML 1.0 para evitar DoS en python-docx."""
+    if texto is None:
+        return ""
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", str(texto))
+
+
+def sanitizar_nombre_archivo(nombre: object, fallback: str = "documento") -> str:
+    """Sanea nombres de archivo para descargas seguras sin caracteres de ruta o cabecera."""
+    limpio = re.sub(r"[^A-Za-z0-9._-]+", "_", str(nombre or "").strip()).strip("._-")
+    return limpio[:80] if limpio else fallback
 
 
 def _menor_de_mil(n: int, apocopar: bool = False) -> str:
@@ -173,35 +204,41 @@ def _bloque_con_ceros_a_letras(bloque: str) -> str:
 
 
 def normalizar_dpi(raw: str) -> str:
-    """Extrae los 13 dígitos de un DPI/CUI si es válido; de lo contrario retorna cadena limpia."""
+    """Extrae los 13 dígitos de un DPI/CUI si es válido; de lo contrario retorna cadena vacía."""
     texto = str(raw or "").strip()
     if not texto or texto.lower() in ("n/a", "no detectado", "no consignado", "cf", "none", "---"):
         return ""
+    if re.search(r"[A-Za-z]", texto):
+        m = re.search(r"(?<!\d)(\d{4})[\s\-]*(\d{5})[\s\-]*(\d{4})(?!\d)", texto)
+        return "".join(m.groups()) if m else ""
     solo_digitos = re.sub(r"\D", "", texto)
     if len(solo_digitos) == 13:
         return solo_digitos
-    m = re.search(r"(?<!\d)(\d{4})[\s\-]*(\d{5})[\s\-]*(\d{4})(?!\d)", texto)
-    if m:
-        return "".join(m.groups())
     return ""
 
 
-def validar_dpi(raw: str) -> Tuple[bool, str]:
+def validar_dpi(raw: str, validar_verificador: bool = False) -> Tuple[bool, str]:
     """
     Valida formato oficial de DPI/CUI de Guatemala (RENAP):
     - 13 dígitos exactos (4 + 5 + 4).
-    - Código de departamento entre 01 y 22; municipio >= 01.
-    Retorna (es_valido, mensaje_o_cui_formateado).
+    - Código de departamento entre 01 y 22 y municipio dentro del catálogo real de 340 municipios.
+    - Si validar_verificador=True, verifica además el dígito verificador Módulo 11 (9.º dígito).
     """
     cui = normalizar_dpi(raw)
     if not cui or len(cui) != 13:
         return False, "Debe contener exactamente 13 dígitos (formato 0000 00000 0000)."
     depto = int(cui[9:11])
     muni = int(cui[11:13])
-    if not (1 <= depto <= 22):
+    max_muni = _MUNICIPIOS_POR_DEPTO_GT.get(depto)
+    if max_muni is None:
         return False, f"Código de departamento '{cui[9:11]}' fuera de rango en Guatemala (01–22)."
-    if muni < 1:
-        return False, f"Código de municipio '{cui[11:13]}' inválido."
+    if muni < 1 or muni > max_muni:
+        return False, f"Código de municipio '{cui[11:13]}' inválido para departamento {cui[9:11]} (máx. {max_muni:02d})."
+    if validar_verificador:
+        suma = sum(int(cui[i]) * (i + 2) for i in range(8))
+        esperado = suma % 11
+        if esperado >= 10 or esperado != int(cui[8]):
+            return False, f"El dígito verificador RENAP del CUI '{cui[:4]} {cui[4:9]} {cui[9:13]}' no coincide."
     return True, f"{cui[:4]} {cui[4:9]} {cui[9:13]}"
 
 
@@ -233,26 +270,27 @@ def dpi_a_letras(raw: str, incluir_digitos: bool = True) -> str:
     l2 = _bloque_con_ceros_a_letras(b2)
     l3 = _bloque_con_ceros_a_letras(b3)
 
-    en_letras = f"{l1}, {l2}, {l3}"
+    en_letras = f"{l1}, espacio, {l2}, espacio, {l3}"
     if incluir_digitos:
         return f"{en_letras} ({b1} {b2} {b3})"
     return en_letras
 
 
 def validar_nit_m11(nit: str) -> Tuple[bool, str]:
-    """Valida dígito verificador SAT de Guatemala (Módulo 11). Acepta 'CF'."""
+    """Valida dígito verificador SAT de Guatemala (Módulo 11). Soporta NITs hasta 13 dígitos y 'CF'."""
     limpio = str(nit or "").strip().upper().replace("-", "").replace(" ", "")
     if not limpio:
         return False, ""
     if limpio in ("CF", "C/F", "CONSUMIDORFINAL"):
         return True, "CF"
-    if not re.match(r"^\d{2,11}[\dK]$", limpio):
+    sin_ceros = limpio.lstrip("0") or limpio
+    if not re.match(r"^\d{1,12}[\dK]$", sin_ceros) or len(sin_ceros) < 2:
         return False, limpio
-    cuerpo, dv = limpio[:-1], limpio[-1]
+    cuerpo, dv = sin_ceros[:-1], sin_ceros[-1]
     suma = sum(int(d) * (len(cuerpo) + 1 - i) for i, d in enumerate(cuerpo))
     esperado_num = (11 - (suma % 11)) % 11
     esperado = "K" if esperado_num == 10 else str(esperado_num)
-    return (dv == esperado), limpio
+    return (dv == esperado), sin_ceros
 
 
 def monto_a_letras(
@@ -263,7 +301,7 @@ def monto_a_letras(
 ) -> str:
     """
     Convierte una cantidad monetaria a redacción notarial guatemalteca.
-    Ejemplo: 250000.0 -> "doscientos cincuenta mil quetzales exactos (Q. 250,000.00)"
+    Ejemplo: 1000000.0 -> "un millón de quetzales exactos (Q. 1,000,000.00)"
     """
     try:
         valor = round(float(monto or 0.0), 2)
@@ -290,14 +328,15 @@ def monto_a_letras(
 
     txt_entero = entero_a_letras(entero, apocopar=True)
     unidad_mon = sing if entero == 1 else plur
+    preposicion = " de " if (entero >= 1_000_000 and entero % 1_000_000 == 0) else " "
 
     if centavos == 0:
         exacto = "exacto" if entero == 1 else "exactos"
-        frase = f"{txt_entero} {unidad_mon} {exacto}"
+        frase = f"{txt_entero}{preposicion}{unidad_mon} {exacto}"
     else:
         txt_cent = entero_a_letras(centavos, apocopar=True)
         unidad_cent = "centavo" if centavos == 1 else "centavos"
-        frase = f"{txt_entero} {unidad_mon} con {txt_cent} {unidad_cent}"
+        frase = f"{txt_entero}{preposicion}{unidad_mon} con {txt_cent} {unidad_cent}"
 
     if negativo:
         frase = f"menos {frase}"
@@ -327,22 +366,31 @@ def _parsear_fecha(fecha_raw: Optional[object]) -> Optional[datetime.date]:
     return None
 
 
+def extraer_anio_fecha(fecha_raw: Optional[object] = None) -> int:
+    """Extrae el año fiscal de una fecha; si no es parseable retorna el año actual en Guatemala."""
+    dt = _parsear_fecha(fecha_raw)
+    if dt:
+        return dt.year
+    m = re.search(r"\b(19\d{2}|20\d{2})\b", str(fecha_raw or ""))
+    if m:
+        return int(m.group(1))
+    return hoy_gt().year
+
+
 def fecha_a_letras(fecha_raw: Optional[object] = None, incluir_anio_palabra: bool = True) -> str:
     """
-    Convierte una fecha a redacción notarial en español (Art. 13 num. 4 Código de Notariado).
-    Si fecha_raw es None o inválida no parseable como fecha, usa la fecha actual del sistema
-    (o retorna el texto literal si ya viene redactado en palabras).
+    Convierte una fecha a redacción notarial en español (Art. 13 num. 4 Código de Notariado),
+    usando zona horaria de Guatemala (UTC-6) por defecto.
     """
     if fecha_raw is None:
-        dt = datetime.date.today()
+        dt = hoy_gt()
     else:
         dt = _parsear_fecha(fecha_raw)
         if dt is None:
             raw_str = str(fecha_raw).strip()
-            # Si el usuario ya lo escribió en palabras (ej. "quince de mayo de dos mil veintiséis")
             if raw_str and re.search(r"[a-záéíóúñ]{4,}", raw_str, re.I) and not raw_str.lower().startswith("n/a"):
                 return raw_str
-            dt = datetime.date.today()
+            dt = hoy_gt()
 
     dia_txt = entero_a_letras(dt.day, apocopar=False)
     mes_txt = _MESES_ES[dt.month]
@@ -353,10 +401,15 @@ def fecha_a_letras(fecha_raw: Optional[object] = None, incluir_anio_palabra: boo
 
 
 def hora_a_letras(hora: Optional[datetime.time] = None) -> str:
-    """Convierte una hora a formato notarial (ej. 'diez horas con quince minutos')."""
+    """Convierte una hora a formato notarial femenino correcto ('una hora con quince minutos')."""
     if hora is None:
-        hora = datetime.datetime.now().time()
-    h_txt = entero_a_letras(hora.hour, apocopar=False)
+        hora = ahora_gt().time()
+    if hora.hour == 1:
+        h_txt = "una"
+    elif hora.hour == 21:
+        h_txt = "veintiuna"
+    else:
+        h_txt = entero_a_letras(hora.hour, apocopar=False)
     h_lbl = "hora" if hora.hour == 1 else "horas"
     if hora.minute == 0:
         return f"{h_txt} {h_lbl} en punto"
@@ -366,8 +419,8 @@ def hora_a_letras(hora: Optional[datetime.time] = None) -> str:
 
 
 def trimestre_actual_info(fecha_ref: Optional[datetime.date] = None) -> Tuple[str, int]:
-    """Retorna (nombre_trimestre, anio) para la fecha de referencia."""
-    dt = fecha_ref or datetime.date.today()
+    """Retorna (nombre_trimestre, anio) en zona horaria Guatemala."""
+    dt = fecha_ref or hoy_gt()
     idx = (dt.month - 1) // 3
     nombres = (
         "Primer Trimestre (enero a marzo)",
@@ -396,11 +449,11 @@ def calcular_timbre_notarial_guatemala(
     except (TypeError, ValueError):
         m = 0.0
 
-    if tipo in ("INDETERMINADO", "MANDATO", "ACTA", "PROTOCOLACION"):
+    if tipo in ("INDETERMINADO", "MANDATO", "ACTA", "PROTOCOLACION", "AUTENTICA"):
         return {
             "timbre_notarial": 10.00,
             "base_legal": "Art. 3 num. II literal b) y c) Decreto 82-96",
-            "regla": "Cuota fija de Q. 10.00 (valor indeterminado / acta notarial / protocolación).",
+            "regla": "Cuota fija de Q. 10.00 (valor indeterminado / acta notarial / legalización / protocolación).",
         }
     if tipo in ("TESTAMENTO", "DONACION_CAUSA_MUERTE"):
         return {
@@ -441,13 +494,8 @@ def calcular_impuestos_testimonio_gt(
     hojas_testimonio: int = 1,
 ) -> Dict[str, object]:
     """
-    Estima impuestos fiscales y forenses para testimonios y memoriales en Guatemala:
-    - Primera venta inmobiliaria / afecto IVA (Dto. 27-92): 12% IVA.
-    - Segunda o subsiguiente compraventa/permuta (Dto. 37-92 Art. 2 num. 9 y Art. 19): 3% Timbre Fiscal.
-    - Mandato General (Dto. 37-92 Art. 5 num. 8 lit. a): Q. 10.00 Timbre Fiscal.
-    - Mandato Especial (Dto. 37-92 Art. 5 num. 8 lit. b): Q. 2.00 Timbre Fiscal.
-    - Razón de Testimonio Especial / Índice (Dto. 37-92 Art. 5 num. 6): Q. 0.50 por hoja.
-    - Memorial Judicial (Dto. 82-96 Art. 3 num. I): Q. 1.00 Timbre Forense por hoja.
+    Estima impuestos fiscales, notariales y forenses vigentes en Guatemala
+    (Dto. 27-92, Dto. 37-92 y Dto. 82-96).
     """
     try:
         m = max(0.0, float(monto or 0.0))
@@ -461,7 +509,7 @@ def calcular_impuestos_testimonio_gt(
 
     if op == "PRIMERA_VENTA_IVA":
         impuesto_primer_test = round(m * 0.12, 2)
-        concepto_fiscal = "IVA 12% (Primera venta/adjudicación, Dto. 27-92)"
+        concepto_fiscal = "IVA 12% sobre valor mayor entre precio pactado y matrícula fiscal (Dto. 27-92)"
         timbre_not = calcular_timbre_notarial_guatemala(m, "VALOR_DETERMINADO")
     elif op == "MANDATO_GENERAL":
         impuesto_primer_test = 10.00
@@ -473,15 +521,32 @@ def calcular_impuestos_testimonio_gt(
         timbre_not = calcular_timbre_notarial_guatemala(0, "MANDATO")
     elif op == "CARTA_PAGO":
         impuesto_primer_test = 0.00
-        concepto_fiscal = "Exento de Timbre Fiscal (Carta total de pago, Art. 11 Dto. 37-92)"
-        timbre_not = calcular_timbre_notarial_guatemala(0, "INDETERMINADO")
+        concepto_fiscal = "Exenta si proviene de crédito bancario/entidad exenta (Art. 11 Dto. 37-92; verificar Art. 2 num. 3 entre particulares)"
+        timbre_not = calcular_timbre_notarial_guatemala(
+            m, "VALOR_DETERMINADO" if m > 0 else "INDETERMINADO"
+        )
     elif op == "PROMESA_COMPRAVENTA":
         impuesto_primer_test = 50.00
         concepto_fiscal = "Timbre Fiscal fijo Q. 50.00 (Promesa de compraventa de inmueble, Art. 5 num. 16 Dto. 37-92)"
         timbre_not = calcular_timbre_notarial_guatemala(m, "VALOR_DETERMINADO")
+    elif op == "ACTA_NOTARIAL":
+        impuesto_primer_test = timbre_razon_especial
+        concepto_fiscal = "Timbre Fiscal Q. 0.50 por hoja del Acta Notarial (Art. 5 num. 6 Dto. 37-92)"
+        timbre_not = calcular_timbre_notarial_guatemala(0, "ACTA")
+    elif op == "AUTENTICA_LEGALIZACION":
+        impuesto_primer_test = 5.00
+        concepto_fiscal = "Timbre Fiscal Q. 5.00 por auténtica/legalización (Art. 5 num. 7 Dto. 37-92)"
+        timbre_not = calcular_timbre_notarial_guatemala(0, "AUTENTICA")
+    elif op == "TESTAMENTO":
+        impuesto_primer_test = 0.00
+        concepto_fiscal = "Sin Timbre Fiscal al otorgar (Q. 0.50 por hoja en Testimonio Especial)"
+        timbre_not = calcular_timbre_notarial_guatemala(0, "TESTAMENTO")
     else:
         impuesto_primer_test = round(m * 0.03, 2)
-        concepto_fiscal = "Impuesto de Timbres Fiscales 3% (Segunda o subsiguiente venta, Art. 2 y 19 Dto. 37-92)"
+        concepto_fiscal = (
+            "Impuesto de Timbres Fiscales 3% (2da o subsiguiente venta, Art. 2 num. 9 y Art. 19 Dto. 37-92: "
+            "base imponible es el valor MAYOR entre precio pactado, avalúo autorizado o matrícula fiscal)"
+        )
         timbre_not = calcular_timbre_notarial_guatemala(m, "VALOR_DETERMINADO")
 
     return {
@@ -496,10 +561,12 @@ def calcular_impuestos_testimonio_gt(
 
 
 def sanitizar_celda_csv(valor: object) -> object:
-    """Neutraliza CSV Formula Injection (CWE-1236) en Excel/LibreOffice."""
+    """Neutraliza CSV Formula Injection (CWE-1236) en Excel/LibreOffice incluyendo prefijos con saltos."""
     if isinstance(valor, str):
-        limpio = valor.lstrip(" ")
-        if limpio and limpio[0] in ("=", "+", "-", "@", "\t", "\r"):
+        limpio = valor.lstrip()
+        if (valor and valor[0] in ("=", "+", "-", "@", "\t", "\r", "\n")) or (
+            limpio and limpio[0] in ("=", "+", "-", "@")
+        ):
             return f"'{valor}"
     return valor
 

@@ -3,7 +3,7 @@ import hmac
 import os
 import secrets
 import sqlite3
-from typing import Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -12,6 +12,8 @@ try:
     import psycopg2
 except ImportError:
     psycopg2 = None
+
+from modulos.notario_gt import extraer_anio_fecha
 
 
 def _obtener_database_url() -> Optional[str]:
@@ -35,11 +37,18 @@ def _ph() -> str:
 
 
 def conectar():
-    """Conecta a PostgreSQL (Neon) si DATABASE_URL está configurada; si no, usa SQLite local."""
+    """Conecta a PostgreSQL (Neon) si DATABASE_URL está configurada; si no, usa SQLite local con WAL."""
     db_url = _obtener_database_url()
-    if db_url and psycopg2 is not None:
-        return psycopg2.connect(db_url, connect_timeout=10)
-    return sqlite3.connect("lex_ia_360.db")
+    if db_url:
+        if psycopg2 is None:
+            raise RuntimeError("DATABASE_URL está configurada pero psycopg2 no está instalado.")
+        return psycopg2.connect(db_url, connect_timeout=15)
+    conn = sqlite3.connect("lex_ia_360.db", timeout=15)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
+    return conn
 
 
 def encriptar_password(password: str) -> str:
@@ -80,6 +89,12 @@ def inicializar_db():
     real_col = "DOUBLE PRECISION" if es_pg else "REAL"
 
     try:
+        cursor.execute(f"""CREATE TABLE IF NOT EXISTS empresas (
+            id {id_col},
+            nombre TEXT NOT NULL,
+            nombre_norm TEXT UNIQUE NOT NULL
+        )""")
+
         cursor.execute(f"""CREATE TABLE IF NOT EXISTS expedientes (
             id {id_col},
             bufete_propietario TEXT,
@@ -97,6 +112,8 @@ def inicializar_db():
             demandado TEXT,
             dpi_demandado TEXT,
             nit_demandado TEXT,
+            datos_registrales TEXT DEFAULT 'N/A',
+            anio_fiscal INTEGER,
             monto_litigio {real_col} DEFAULT 0.0,
             timbre_notarial {real_col} DEFAULT 0.0,
             timbre_fiscal {real_col} DEFAULT 0.0,
@@ -110,9 +127,11 @@ def inicializar_db():
             fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""")
 
-        columnas_nuevas = [
+        columnas_exp = [
             ("categoria_documental", "TEXT DEFAULT 'EXPEDIENTE_JUDICIAL'"),
             ("folio_protocolo", "TEXT DEFAULT 'N/A'"),
+            ("datos_registrales", "TEXT DEFAULT 'N/A'"),
+            ("anio_fiscal", "INTEGER"),
             ("timbre_notarial", f"{real_col} DEFAULT 0.0"),
             ("timbre_fiscal", f"{real_col} DEFAULT 0.0"),
             ("registro_destino", "TEXT DEFAULT 'Archivo General de Protocolos'"),
@@ -120,18 +139,16 @@ def inicializar_db():
             ("resumen_forense", "TEXT"),
         ]
         if es_pg:
-            for col_nom, col_tipo in columnas_nuevas:
-                cursor.execute(
-                    f"ALTER TABLE expedientes ADD COLUMN IF NOT EXISTS {col_nom} {col_tipo}"
-                )
+            for col_nom, col_tipo in columnas_exp:
+                cursor.execute(f"ALTER TABLE expedientes ADD COLUMN IF NOT EXISTS {col_nom} {col_tipo}")
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_exp_bufete ON expedientes (bufete_propietario, fecha_registro DESC)"
             )
         else:
             cursor.execute("PRAGMA table_info(expedientes)")
-            columnas_actuales = [row[1] for row in cursor.fetchall()]
-            for col_nom, col_tipo in columnas_nuevas:
-                if col_nom not in columnas_actuales:
+            actuales = {row[1] for row in cursor.fetchall()}
+            for col_nom, col_tipo in columnas_exp:
+                if col_nom not in actuales:
                     try:
                         cursor.execute(f"ALTER TABLE expedientes ADD COLUMN {col_nom} {col_tipo}")
                     except Exception:
@@ -142,17 +159,67 @@ def inicializar_db():
             usuario TEXT UNIQUE,
             password TEXT,
             empresa TEXT,
-            rol TEXT
+            rol TEXT,
+            notario_nombre TEXT DEFAULT '',
+            notario_colegiado TEXT DEFAULT '',
+            notario_clave TEXT DEFAULT '',
+            sede_notarial TEXT DEFAULT 'la ciudad de Guatemala'
         )""")
+
+        columnas_usr = [
+            ("notario_nombre", "TEXT DEFAULT ''"),
+            ("notario_colegiado", "TEXT DEFAULT ''"),
+            ("notario_clave", "TEXT DEFAULT ''"),
+            ("sede_notarial", "TEXT DEFAULT 'la ciudad de Guatemala'"),
+        ]
+        if es_pg:
+            for col_nom, col_tipo in columnas_usr:
+                cursor.execute(f"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS {col_nom} {col_tipo}")
+        else:
+            cursor.execute("PRAGMA table_info(usuarios)")
+            actuales_u = {row[1] for row in cursor.fetchall()}
+            for col_nom, col_tipo in columnas_usr:
+                if col_nom not in actuales_u:
+                    try:
+                        cursor.execute(f"ALTER TABLE usuarios ADD COLUMN {col_nom} {col_tipo}")
+                    except Exception:
+                        pass
 
         cursor.execute("SELECT COUNT(*) FROM usuarios")
         if cursor.fetchone()[0] == 0:
-            pass_admin = encriptar_password("admin123")
+            init_pwd = os.environ.get("ADMIN_INIT_PASSWORD", "").strip()
+            if not init_pwd:
+                try:
+                    init_pwd = str(st.secrets.get("ADMIN_INIT_PASSWORD", "")).strip()
+                except Exception:
+                    init_pwd = ""
+            if not init_pwd:
+                init_pwd = "admin123"
             p = _ph()
             cursor.execute(
                 f"INSERT INTO usuarios (usuario, password, empresa, rol) VALUES ({p}, {p}, {p}, {p})",
-                ("admin", pass_admin, "Firma Legal Principal", "Administrador"),
+                ("admin", encriptar_password(init_pwd), "Firma Legal Principal", "Administrador"),
             )
+
+        # Sincronizar catálogo de empresas únicas existentes
+        cursor.execute("SELECT DISTINCT empresa FROM usuarios WHERE empresa IS NOT NULL AND TRIM(empresa) != ''")
+        emps = {str(r[0]).strip() for r in cursor.fetchall()}
+        cursor.execute(
+            "SELECT DISTINCT bufete_propietario FROM expedientes WHERE bufete_propietario IS NOT NULL AND TRIM(bufete_propietario) != ''"
+        )
+        emps |= {str(r[0]).strip() for r in cursor.fetchall()}
+        p = _ph()
+        for emp in emps:
+            if es_pg:
+                cursor.execute(
+                    f"INSERT INTO empresas (nombre, nombre_norm) VALUES ({p}, {p}) ON CONFLICT (nombre_norm) DO NOTHING",
+                    (emp, emp.lower()),
+                )
+            else:
+                cursor.execute(
+                    f"INSERT OR IGNORE INTO empresas (nombre, nombre_norm) VALUES ({p}, {p})",
+                    (emp, emp.lower()),
+                )
 
         conexion.commit()
     except Exception:
@@ -169,13 +236,18 @@ def autenticar_usuario(usuario, password):
     p = _ph()
     try:
         cursor.execute(
-            f"SELECT id, usuario, password, empresa, rol FROM usuarios WHERE usuario = {p}",
+            f"""
+            SELECT id, usuario, password, empresa, rol,
+                   COALESCE(notario_nombre, ''), COALESCE(notario_colegiado, ''),
+                   COALESCE(notario_clave, ''), COALESCE(sede_notarial, 'la ciudad de Guatemala')
+            FROM usuarios WHERE usuario = {p}
+            """,
             (usuario,),
         )
         res = cursor.fetchone()
         if not res:
             return None
-        uid, usr, stored_hash, empresa, rol = res
+        uid, usr, stored_hash, empresa, rol, n_nom, n_col, n_clv, n_sede = res
         valida, necesita_rehash = _verificar_password(password, stored_hash)
         if not valida:
             return None
@@ -185,29 +257,52 @@ def autenticar_usuario(usuario, password):
                 (encriptar_password(password), uid),
             )
             conexion.commit()
-        return {"usuario": usr, "empresa": empresa, "rol": rol}
+        return {
+            "usuario": usr,
+            "empresa": empresa,
+            "rol": rol,
+            "notario_nombre": n_nom,
+            "notario_colegiado": n_col,
+            "notario_clave": n_clv,
+            "sede_notarial": n_sede or "la ciudad de Guatemala",
+        }
     finally:
         cursor.close()
         conexion.close()
 
 
-def _listar_empresas_en_cursor(cursor) -> list:
+def actualizar_perfil_notario(usuario: str, empresa: str, nombre: str, colegiado: str, clave: str, sede: str) -> None:
+    conexion = conectar()
+    cursor = conexion.cursor()
+    p = _ph()
+    try:
+        cursor.execute(
+            f"""
+            UPDATE usuarios
+            SET notario_nombre = {p}, notario_colegiado = {p}, notario_clave = {p}, sede_notarial = {p}
+            WHERE usuario = {p} AND empresa = {p}
+            """,
+            (nombre.strip(), colegiado.strip(), clave.strip(), sede.strip() or "la ciudad de Guatemala", usuario, empresa),
+        )
+        conexion.commit()
+    finally:
+        cursor.close()
+        conexion.close()
+
+
+def _listar_empresas_en_cursor(cursor) -> List[str]:
     empresas = set()
+    cursor.execute("SELECT nombre FROM empresas")
+    for (emp,) in cursor.fetchall():
+        if emp and str(emp).strip():
+            empresas.add(str(emp).strip())
     cursor.execute("SELECT DISTINCT empresa FROM usuarios WHERE empresa IS NOT NULL AND TRIM(empresa) != ''")
     for (emp,) in cursor.fetchall():
         empresas.add(str(emp).strip())
-    try:
-        cursor.execute(
-            "SELECT DISTINCT bufete_propietario FROM expedientes WHERE bufete_propietario IS NOT NULL AND TRIM(bufete_propietario) != ''"
-        )
-        for (emp,) in cursor.fetchall():
-            empresas.add(str(emp).strip())
-    except Exception:
-        pass
     return sorted(empresas, key=lambda s: s.lower())
 
 
-def obtener_empresas_activas() -> list:
+def obtener_empresas_activas() -> List[str]:
     """Lista todas las empresas/bufetes existentes (para Super-Admin maestro)."""
     conexion = conectar()
     cursor = conexion.cursor()
@@ -218,22 +313,41 @@ def obtener_empresas_activas() -> list:
         conexion.close()
 
 
-def resolver_nombre_empresa_unico(nombre_deseado: str, cursor=None) -> str:
-    """
-    Garantiza nombres de empresa/bufete 100% únicos sin distinción de mayúsculas.
-    Si 'A' ya existe, asigna 'A1'; si 'A1' existe, 'A2', etc.
-    """
-    base = " ".join(str(nombre_deseado or "").split())
-    if not base:
-        base = "Despacho"
+def _reservar_empresa_atomica(cursor, nombre_deseado: str, es_pg: bool) -> str:
+    """Reserva un nombre único de empresa en tabla `empresas` sin TOCTOU (A -> A1 -> A2)."""
+    base = " ".join(str(nombre_deseado or "").split()) or "Despacho"
+    p = _ph()
+    intento = 0
+    while intento < 500:
+        cand = base if intento == 0 else f"{base}{intento}"
+        if es_pg:
+            cursor.execute(
+                f"INSERT INTO empresas (nombre, nombre_norm) VALUES ({p}, {p}) ON CONFLICT (nombre_norm) DO NOTHING RETURNING nombre",
+                (cand, cand.lower()),
+            )
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+        else:
+            cursor.execute(
+                f"INSERT OR IGNORE INTO empresas (nombre, nombre_norm) VALUES ({p}, {p})",
+                (cand, cand.lower()),
+            )
+            if cursor.rowcount == 1:
+                return cand
+        intento += 1
+    raise RuntimeError("No se pudo reservar un nombre único de empresa.")
 
+
+def resolver_nombre_empresa_unico(nombre_deseado: str, cursor=None) -> str:
+    """Preview no destructivo del próximo nombre único disponible (A -> A1)."""
+    base = " ".join(str(nombre_deseado or "").split()) or "Despacho"
     cerrar = False
     conn = None
     if cursor is None:
         conn = conectar()
         cursor = conn.cursor()
         cerrar = True
-
     try:
         existentes = {e.strip().lower() for e in _listar_empresas_en_cursor(cursor)}
         if base.lower() not in existentes:
@@ -249,11 +363,7 @@ def resolver_nombre_empresa_unico(nombre_deseado: str, cursor=None) -> str:
 
 
 def registrar_nueva_empresa_usuario(u: str, p_raw: str, empresa_deseada: str, r: str) -> Tuple[bool, str, str]:
-    """
-    Crea una nueva empresa/bufete completamente aislada garantizando nombre único (A -> A1)
-    y registra su usuario inicial dentro de la misma transacción.
-    Retorna (exito, empresa_final_asignada, mensaje).
-    """
+    """Crea empresa atómicamente en tabla `empresas` (A -> A1) y registra su usuario inicial."""
     u_limpio = str(u or "").strip()
     emp_limpia = " ".join(str(empresa_deseada or "").split())
     if not u_limpio or not p_raw or not emp_limpia:
@@ -262,9 +372,10 @@ def registrar_nueva_empresa_usuario(u: str, p_raw: str, empresa_deseada: str, r:
     conexion = conectar()
     cursor = conexion.cursor()
     p = _ph()
+    es_pg = _es_postgres()
     err_types = (sqlite3.IntegrityError,) + ((psycopg2.IntegrityError,) if psycopg2 else ())
     try:
-        empresa_final = resolver_nombre_empresa_unico(emp_limpia, cursor=cursor)
+        empresa_final = _reservar_empresa_atomica(cursor, emp_limpia, es_pg)
         cursor.execute(
             f"INSERT INTO usuarios (usuario, password, empresa, rol) VALUES ({p}, {p}, {p}, {p})",
             (u_limpio, encriptar_password(p_raw), empresa_final, r),
@@ -289,11 +400,12 @@ def registrar_usuario(u, p_raw, e, r):
     conexion = conectar()
     cursor = conexion.cursor()
     p = _ph()
+    emp_limpia = " ".join(str(e or "").split())
     err_types = (sqlite3.IntegrityError,) + ((psycopg2.IntegrityError,) if psycopg2 else ())
     try:
         cursor.execute(
             f"INSERT INTO usuarios (usuario, password, empresa, rol) VALUES ({p}, {p}, {p}, {p})",
-            (u, encriptar_password(p_raw), e, r),
+            (u.strip(), encriptar_password(p_raw), emp_limpia, r),
         )
         conexion.commit()
         return True
@@ -305,7 +417,10 @@ def registrar_usuario(u, p_raw, e, r):
         conexion.close()
 
 
-def actualizar_password(usuario, nueva_p, empresa=None):
+def actualizar_password(usuario, nueva_p, empresa=None, actor=None):
+    """Restablece contraseña protegiendo al Super-Admin 'admin' contra escalación de privilegios."""
+    if usuario == "admin" and actor != "admin":
+        return False
     conexion = conectar()
     cursor = conexion.cursor()
     p = _ph()
@@ -321,6 +436,7 @@ def actualizar_password(usuario, nueva_p, empresa=None):
                 (encriptar_password(nueva_p), usuario),
             )
         conexion.commit()
+        return cursor.rowcount > 0
     finally:
         cursor.close()
         conexion.close()
@@ -332,7 +448,7 @@ def obtener_usuarios_empresa(empresa):
     p = _ph()
     try:
         cursor.execute(
-            f"SELECT usuario, rol FROM usuarios WHERE empresa = {p} ORDER BY usuario",
+            f"SELECT usuario, rol FROM usuarios WHERE empresa = {p} AND usuario != 'admin' ORDER BY usuario",
             (empresa,),
         )
         columnas = [desc[0] for desc in cursor.description]
@@ -380,6 +496,7 @@ def eliminar_usuario(usuario, empresa=None, actor=None):
 
 
 def guardar_expedientes(lista_datos, bufete, abogado_activo):
+    """Inserta expedientes/escrituras deduplicando por (numero, folio, anio_fiscal, notario/juzgado)."""
     conexion = conectar()
     cursor = conexion.cursor()
     p = _ph()
@@ -389,61 +506,70 @@ def guardar_expedientes(lista_datos, bufete, abogado_activo):
     try:
         cursor.execute(
             f"""
-            SELECT numero_expediente, folio_protocolo
+            SELECT numero_expediente, folio_protocolo, COALESCE(anio_fiscal, 0), COALESCE(juzgado, '')
             FROM expedientes
             WHERE bufete_propietario = {p}
             AND numero_expediente NOT IN ('No detectado', 'N/A', '')
             """,
             (bufete,),
         )
-        existentes = {(str(r[0]).strip(), str(r[1]).strip()) for r in cursor.fetchall()}
+        existentes = {
+            (str(r[0]).strip(), str(r[1]).strip(), int(r[2] or 0), str(r[3]).strip().lower())
+            for r in cursor.fetchall()
+        }
 
         for d in lista_datos:
-            exp_num = str(d.get("numero_expediente", "No detectado")).strip()
-            fol_num = str(d.get("folio_protocolo", "N/A")).strip()
+            exp_num = str(d.get("numero_expediente") or "No detectado").strip()
+            fol_num = str(d.get("folio_protocolo") or "N/A").strip()
+            fecha_res = str(d.get("fecha_resolucion") or "N/A").strip()
+            anio_f = int(d.get("anio_fiscal") or extraer_anio_fecha(fecha_res))
+            juzg = str(d.get("juzgado") or "No detectado").strip()
+            clave = (exp_num, fol_num, anio_f, juzg.lower())
 
-            if exp_num not in ("No detectado", "N/A", "") and (exp_num, fol_num) in existentes:
+            if exp_num not in ("No detectado", "N/A", "") and clave in existentes:
                 omitidas += 1
                 continue
 
             if exp_num not in ("No detectado", "N/A", ""):
-                existentes.add((exp_num, fol_num))
+                existentes.add(clave)
 
-            placeholders = ", ".join([p] * 25)
+            placeholders = ", ".join([p] * 27)
             cursor.execute(
                 f"""INSERT INTO expedientes (
                     bufete_propietario, usuario, archivo_origen, categoria_documental, numero_expediente,
                     folio_protocolo, juzgado, materia, tipo_proceso, demandante, dpi_demandante,
-                    nit_demandante, demandado, dpi_demandado, nit_demandado, monto_litigio,
-                    timbre_notarial, timbre_fiscal, registro_destino, fecha_resolucion,
+                    nit_demandante, demandado, dpi_demandado, nit_demandado, datos_registrales, anio_fiscal,
+                    monto_litigio, timbre_notarial, timbre_fiscal, registro_destino, fecha_resolucion,
                     fecha_audiencia, plazo_procesal, semaforo, anomalia, resumen_forense)
                     VALUES ({placeholders})""",
                 (
                     bufete,
                     abogado_activo,
                     d.get("archivo_origen"),
-                    d.get("categoria_documental", "EXPEDIENTE_JUDICIAL"),
+                    d.get("categoria_documental") or "EXPEDIENTE_JUDICIAL",
                     exp_num,
                     fol_num,
-                    d.get("juzgado", "No detectado"),
-                    d.get("materia", "Civil"),
-                    d.get("tipo_proceso", "No detectado"),
-                    d.get("demandante", "Desconocido"),
-                    d.get("dpi_demandante", "No detectado"),
-                    d.get("nit_demandante", "No detectado"),
-                    d.get("demandado", "Desconocido"),
-                    d.get("dpi_demandado", "No detectado"),
-                    d.get("nit_demandado", "No detectado"),
-                    float(d.get("monto_litigio", 0.0)),
-                    float(d.get("timbre_notarial", 0.0)),
-                    float(d.get("timbre_fiscal", 0.0)),
-                    d.get("registro_destino", "Archivo General de Protocolos"),
-                    d.get("fecha_resolucion", "N/A"),
-                    d.get("fecha_audiencia", "N/A"),
-                    d.get("plazo_procesal", "N/A"),
-                    d.get("semaforo", "🟢 TRÁMITE"),
-                    d.get("anomalia", "ninguna"),
-                    d.get("resumen_forense", ""),
+                    juzg,
+                    d.get("materia") or "Civil",
+                    d.get("tipo_proceso") or "No detectado",
+                    d.get("demandante") or "Desconocido",
+                    d.get("dpi_demandante") or "No detectado",
+                    d.get("nit_demandante") or "No detectado",
+                    d.get("demandado") or "Desconocido",
+                    d.get("dpi_demandado") or "No detectado",
+                    d.get("nit_demandado") or "No detectado",
+                    d.get("datos_registrales") or "N/A",
+                    anio_f,
+                    float(d.get("monto_litigio") or 0.0),
+                    float(d.get("timbre_notarial") or 0.0),
+                    float(d.get("timbre_fiscal") or 0.0),
+                    d.get("registro_destino") or "Archivo General de Protocolos",
+                    fecha_res,
+                    d.get("fecha_audiencia") or "N/A",
+                    d.get("plazo_procesal") or "N/A",
+                    d.get("semaforo") or "🟢 TRÁMITE",
+                    d.get("anomalia") or "ninguna",
+                    d.get("resumen_forense") or "",
                 ),
             )
             guardadas += 1
@@ -456,6 +582,53 @@ def guardar_expedientes(lista_datos, bufete, abogado_activo):
         cursor.close()
         conexion.close()
     return guardadas, omitidas
+
+
+def actualizar_expediente(exp_id: int, bufete: str, campos: Dict[str, Any]) -> bool:
+    """Actualiza campos editables de un expediente/escritura estrictamente dentro del bufete propietario."""
+    permitidos = {
+        "numero_expediente", "folio_protocolo", "juzgado", "tipo_proceso", "demandante",
+        "dpi_demandante", "nit_demandante", "demandado", "dpi_demandado", "nit_demandado",
+        "datos_registrales", "monto_litigio", "timbre_notarial", "timbre_fiscal",
+        "fecha_resolucion", "semaforo", "anomalia",
+    }
+    updates = {k: v for k, v in campos.items() if k in permitidos}
+    if not updates:
+        return False
+    if "fecha_resolucion" in updates:
+        updates["anio_fiscal"] = extraer_anio_fecha(updates["fecha_resolucion"])
+    conexion = conectar()
+    cursor = conexion.cursor()
+    p = _ph()
+    try:
+        set_clause = ", ".join(f"{k} = {p}" for k in updates)
+        valores = list(updates.values()) + [int(exp_id), bufete]
+        cursor.execute(
+            f"UPDATE expedientes SET {set_clause} WHERE id = {p} AND bufete_propietario = {p}",
+            valores,
+        )
+        conexion.commit()
+        return cursor.rowcount > 0
+    finally:
+        cursor.close()
+        conexion.close()
+
+
+def eliminar_expediente(exp_id: int, bufete: str) -> bool:
+    """Elimina un registro de la bóveda estrictamente dentro del bufete propietario."""
+    conexion = conectar()
+    cursor = conexion.cursor()
+    p = _ph()
+    try:
+        cursor.execute(
+            f"DELETE FROM expedientes WHERE id = {p} AND bufete_propietario = {p}",
+            (int(exp_id), bufete),
+        )
+        conexion.commit()
+        return cursor.rowcount > 0
+    finally:
+        cursor.close()
+        conexion.close()
 
 
 def obtener_historial(bufete):

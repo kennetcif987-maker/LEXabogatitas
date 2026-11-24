@@ -2,6 +2,7 @@ import datetime
 import json
 import os
 import re
+import tempfile
 import time
 import uuid
 
@@ -10,8 +11,11 @@ import pandas as pd
 import streamlit as st
 
 from modulos.base_datos import (
+    actualizar_expediente,
     actualizar_password,
+    actualizar_perfil_notario,
     autenticar_usuario,
+    eliminar_expediente,
     eliminar_usuario,
     guardar_expedientes,
     inicializar_db_una_vez,
@@ -25,11 +29,13 @@ from modulos.base_datos import (
 from modulos.catalogo_plantillas import CATALOGO_PLANTILLAS
 from modulos.conexion_api import analizar_expediente
 from modulos.formateador_legal import (
+    generar_documento_acta_notarial,
     generar_documento_memorial_judicial,
     generar_documento_protocolo_espanol,
 )
 from modulos.generador_avisos import (
     generar_aviso_agp_testimonio,
+    generar_aviso_cancelacion_agp,
     generar_aviso_dicabi,
     generar_aviso_matrimonio_renap,
     generar_aviso_trimestral_agp,
@@ -42,11 +48,15 @@ from modulos.notario_gt import (
     calcular_timbre_notarial_guatemala,
     dataframe_a_csv_seguro,
     dpi_a_letras,
+    entero_a_letras,
+    extraer_anio_fecha,
     fecha_a_letras,
     formatear_dpi_espaciado,
     hora_a_letras,
+    hoy_gt,
     monto_a_letras,
     normalizar_dpi,
+    sanitizar_nombre_archivo,
     trimestre_actual_info,
     validar_dpi,
     validar_nit_m11,
@@ -58,27 +68,38 @@ st.set_page_config(
     page_icon="⚖️",
     layout="wide",
 )
-inicializar_db_una_vez()
+try:
+    inicializar_db_una_vez()
+except Exception as e_init:
+    st.error(f"🚨 Base de datos temporalmente inaccesible. Intente recargar en unos segundos. ({e_init})")
+    st.stop()
+
+
+@st.cache_data(ttl=30)
+def _historial_cacheado(bufete: str) -> pd.DataFrame:
+    return obtener_historial(bufete)
+
 
 # --- 2. ESTADO DE SESIÓN ---
-if "auth" not in st.session_state:
-    st.session_state["auth"] = False
-if "user" not in st.session_state:
-    st.session_state["user"] = None
-if "data" not in st.session_state:
-    st.session_state["data"] = []
-if "analisis_completado" not in st.session_state:
-    st.session_state["analisis_completado"] = False
-if "uploader_key" not in st.session_state:
-    st.session_state["uploader_key"] = 0
-if "all_raw_responses" not in st.session_state:
-    st.session_state["all_raw_responses"] = {}
-if "notario_nombre" not in st.session_state:
-    st.session_state["notario_nombre"] = ""
-if "notario_colegiado" not in st.session_state:
-    st.session_state["notario_colegiado"] = ""
-if "notario_clave" not in st.session_state:
-    st.session_state["notario_clave"] = ""
+def _init_session_defaults():
+    defaults = {
+        "auth": False,
+        "user": None,
+        "data": [],
+        "analisis_completado": False,
+        "uploader_key": 0,
+        "all_raw_responses": {},
+        "notario_nombre": "",
+        "notario_colegiado": "",
+        "notario_clave": "",
+        "sede_notarial": "la ciudad de Guatemala",
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
+_init_session_defaults()
 
 
 def _normalizar_doc_identidad_lex(dpi_raw: str, nit_raw: str, rol_label: str, alertas: list):
@@ -110,6 +131,18 @@ def _clave_orden_instrumento(valor) -> tuple:
     return (0, int(dig), raw) if dig else (1, 0, raw)
 
 
+def _extraer_mes_trimestre(fecha_str: str) -> tuple:
+    """Retorna (anio, trimestre_1_a_4) o (None, None) si no parseable."""
+    txt = str(fecha_str or "").strip()
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"):
+        try:
+            dt = datetime.datetime.strptime(txt[:10], fmt).date()
+            return dt.year, ((dt.month - 1) // 3) + 1
+        except ValueError:
+            continue
+    return None, None
+
+
 # --- 3. PROCESAMIENTO FORENSE DE RESPUESTAS GEMINI ---
 def procesar_respuesta_gemini(raw_response, file_name):
     data = {
@@ -126,6 +159,8 @@ def procesar_respuesta_gemini(raw_response, file_name):
         "demandado": "Desconocido",
         "dpi_demandado": "No detectado",
         "nit_demandado": "No detectado",
+        "datos_registrales": "N/A",
+        "anio_fiscal": hoy_gt().year,
         "monto_litigio": 0.0,
         "timbre_notarial": 0.0,
         "timbre_fiscal": 0.0,
@@ -138,99 +173,127 @@ def procesar_respuesta_gemini(raw_response, file_name):
         "resumen_forense": "",
     }
 
-    if not raw_response or '"error"' in str(raw_response).lower():
-        try:
-            err_obj = json.loads(str(raw_response))
-            data["anomalia"] = err_obj.get("error", "Error en análisis o documento ilegible")
-        except Exception:
-            data["anomalia"] = "Error en análisis o documento ilegible"
+    if not raw_response:
+        data["anomalia"] = "Respuesta vacía del motor OCR"
         return data
 
     try:
-        match = re.search(r"\{.*\}", str(raw_response), re.DOTALL)
-        if match:
-            parsed = json.loads(match.group(0))
-            data["categoria_documental"] = parsed.get("categoria_documental", "EXPEDIENTE_JUDICIAL")
-            data["numero_expediente"] = str(parsed.get("numero_instrumento_o_caso", "No detectado"))
-            data["folio_protocolo"] = str(parsed.get("folio_protocolo", "N/A"))
-            data["fecha_resolucion"] = str(parsed.get("fecha_documento", "N/A"))
-            data["juzgado"] = str(parsed.get("notario_o_juzgado", "No detectado"))
-            data["tipo_proceso"] = str(parsed.get("tipo_acto_o_juicio", "No detectado"))
-            data["materia"] = str(
-                parsed.get(
-                    "materia_derecho",
-                    "Notarial" if "PROTOCOLO" in data["categoria_documental"] else "Civil",
-                )
+        parsed = None
+        try:
+            parsed = json.loads(str(raw_response))
+        except Exception:
+            match = re.search(r"\{.*\}", str(raw_response), re.DOTALL)
+            if match:
+                parsed = json.loads(match.group(0))
+
+        if not isinstance(parsed, dict):
+            data["anomalia"] = "Respuesta no estructurada del motor OCR"
+            return data
+        if "error" in parsed and len(parsed) <= 2:
+            data["anomalia"] = str(parsed.get("error") or "Error en análisis")
+            return data
+
+        data["categoria_documental"] = parsed.get("categoria_documental", "EXPEDIENTE_JUDICIAL")
+        data["numero_expediente"] = str(parsed.get("numero_instrumento_o_caso", "No detectado"))
+        data["folio_protocolo"] = str(parsed.get("folio_protocolo", "N/A"))
+        data["fecha_resolucion"] = str(parsed.get("fecha_documento", "N/A"))
+        data["anio_fiscal"] = extraer_anio_fecha(data["fecha_resolucion"])
+        data["juzgado"] = str(parsed.get("notario_o_juzgado", "No detectado"))
+        data["tipo_proceso"] = str(parsed.get("tipo_acto_o_juicio", "No detectado"))
+        data["materia"] = str(
+            parsed.get(
+                "materia_derecho",
+                "Notarial" if "PROTOCOLO" in str(data["categoria_documental"]) else "Civil",
             )
-            monto_val = float(parsed.get("monto_cuantia_o_precio", 0.0) or 0.0)
-            data["monto_litigio"] = monto_val
+        )
+        data["datos_registrales"] = str(parsed.get("datos_registrales_e_inmueble") or "N/A")
+        monto_val = float(parsed.get("monto_cuantia_o_precio") or 0.0)
+        data["monto_litigio"] = monto_val
 
-            tn_raw = float(parsed.get("timbre_notarial_estimado", 0.0) or 0.0)
-            if tn_raw == 0.0 and "PROTOCOLO" in str(data["categoria_documental"]):
-                calc_tn = calcular_timbre_notarial_guatemala(
-                    monto_val,
-                    "VALOR_DETERMINADO" if monto_val > 0 else "INDETERMINADO",
+        tn_raw = float(parsed.get("timbre_notarial_estimado") or 0.0)
+        if tn_raw == 0.0 and "PROTOCOLO" in str(data["categoria_documental"]):
+            calc_tn = calcular_timbre_notarial_guatemala(
+                monto_val,
+                "VALOR_DETERMINADO" if monto_val > 0 else "INDETERMINADO",
+            )
+            tn_raw = float(calc_tn["timbre_notarial"])
+        data["timbre_notarial"] = tn_raw
+
+        data["timbre_fiscal"] = float(parsed.get("timbre_fiscal_o_iva") or 0.0)
+        data["registro_destino"] = str(parsed.get("registro_destino", "Archivo General de Protocolos"))
+        data["plazo_procesal"] = str(parsed.get("plazo_o_termino", "N/A"))
+        data["semaforo"] = str(parsed.get("semaforo_alerta", "🟢 TRÁMITE"))
+        data["resumen_forense"] = str(parsed.get("resumen_ejecutivo", ""))
+        data["anomalia"] = str(parsed.get("alertas_forenses", "ninguna"))
+
+        otorgantes = parsed.get("otorgantes_o_partes", [])
+        alertas_id = []
+        if isinstance(otorgantes, list) and len(otorgantes) > 0:
+            p1 = otorgantes[0]
+            data["demandante"] = f"{p1.get('nombre_completo', 'Desconocido')} ({p1.get('rol_en_acto', 'Parte 1')})"
+            d1, n1 = _normalizar_doc_identidad_lex(
+                p1.get("identificacion_dpi"), p1.get("nit"), "Parte 1", alertas_id
+            )
+            data["dpi_demandante"] = d1
+            data["nit_demandante"] = n1
+
+            if len(otorgantes) > 1:
+                p2_list = [
+                    f"{p.get('nombre_completo', '')} ({p.get('rol_en_acto', '')})"
+                    for p in otorgantes[1:]
+                ]
+                data["demandado"] = " | ".join(p2_list)
+                d2, n2 = _normalizar_doc_identidad_lex(
+                    otorgantes[1].get("identificacion_dpi"),
+                    otorgantes[1].get("nit"),
+                    "Parte 2",
+                    alertas_id,
                 )
-                tn_raw = float(calc_tn["timbre_notarial"])
-            data["timbre_notarial"] = tn_raw
-
-            data["timbre_fiscal"] = float(parsed.get("timbre_fiscal_o_iva", 0.0) or 0.0)
-            data["registro_destino"] = str(parsed.get("registro_destino", "Archivo General de Protocolos"))
-            data["plazo_procesal"] = str(parsed.get("plazo_o_termino", "N/A"))
-            data["semaforo"] = str(parsed.get("semaforo_alerta", "🟢 TRÁMITE"))
-            data["resumen_forense"] = str(parsed.get("resumen_ejecutivo", ""))
-            data["anomalia"] = str(parsed.get("alertas_forenses", "ninguna"))
-
-            otorgantes = parsed.get("otorgantes_o_partes", [])
-            alertas_id = []
-            if isinstance(otorgantes, list) and len(otorgantes) > 0:
-                p1 = otorgantes[0]
-                data["demandante"] = f"{p1.get('nombre_completo', 'Desconocido')} ({p1.get('rol_en_acto', 'Parte 1')})"
-                d1, n1 = _normalizar_doc_identidad_lex(
-                    p1.get("identificacion_dpi"), p1.get("nit"), "Parte 1", alertas_id
-                )
-                data["dpi_demandante"] = d1
-                data["nit_demandante"] = n1
-
-                if len(otorgantes) > 1:
-                    p2_list = [
-                        f"{p.get('nombre_completo', '')} ({p.get('rol_en_acto', '')})"
-                        for p in otorgantes[1:]
-                    ]
-                    data["demandado"] = " | ".join(p2_list)
-                    d2, n2 = _normalizar_doc_identidad_lex(
-                        otorgantes[1].get("identificacion_dpi"),
-                        otorgantes[1].get("nit"),
-                        "Parte 2",
+                data["dpi_demandado"] = d2
+                data["nit_demandado"] = n2
+                # Validar también DPI/NIT de otorgantes adicionales (3ro en adelante)
+                for extra_i, p_ext in enumerate(otorgantes[2:], start=3):
+                    _normalizar_doc_identidad_lex(
+                        p_ext.get("identificacion_dpi"),
+                        p_ext.get("nit"),
+                        f"Parte {extra_i}",
                         alertas_id,
                     )
-                    data["dpi_demandado"] = d2
-                    data["nit_demandado"] = n2
-                else:
-                    data["demandado"] = "Unilateral / Acto notarial sin contraparte"
+            else:
+                data["demandado"] = "Unilateral / Acto notarial sin contraparte"
 
-            if alertas_id:
-                base_anom = str(data.get("anomalia") or "").strip()
-                extra = " | ".join(f"⚠️ {a}" for a in alertas_id)
-                data["anomalia"] = (
-                    extra if base_anom.lower() in ("", "ninguna", "none") else f"{base_anom} | {extra}"
-                )
+        if alertas_id:
+            base_anom = str(data.get("anomalia") or "").strip()
+            extra = " | ".join(f"⚠️ {a}" for a in alertas_id)
+            data["anomalia"] = (
+                extra if base_anom.lower() in ("", "ninguna", "none") else f"{base_anom} | {extra}"
+            )
     except Exception as e:
         data["anomalia"] = f"Parseo parcial: {str(e)}"
 
     return data
 
 
-def _sustituir_campos_plantilla(texto_base: str, valores: dict, notario_def: str) -> str:
-    """Rellena campos convirtiendo DPIs y montos ingresados a letras + cifras cuando aplica."""
+def _sustituir_campos_plantilla(
+    texto_base: str,
+    valores: dict,
+    notario_def: str,
+    sede_def: str = "la ciudad de Guatemala",
+    es_protocolo: bool = False,
+) -> str:
+    """Rellena campos convirtiendo DPIs, montos, fechas y números de protocolo a letras (Art. 13 CDN)."""
     texto = texto_base
-    hoy_letras = f"la ciudad de Guatemala, el {fecha_a_letras()}"
+    hoy_letras = f"{sede_def}, el {fecha_a_letras()}"
     hora_actual_letras = hora_a_letras()
+
+    campos_entero_protocolo = {
+        "numero_escritura", "finca", "folio", "libro", "escritura_origen_num"
+    }
 
     for campo, raw_val in valores.items():
         val = str(raw_val or "").strip()
         if not val:
-            if campo == "notario" or campo == "abogado_auxiliante" or campo == "defensor_nombre":
+            if campo in ("notario", "abogado_auxiliante", "defensor_nombre", "abogado_defensor"):
                 val = notario_def or f"[{campo.upper()}]"
             elif campo in ("lugar_y_fecha_letras", "ciudad_y_fecha"):
                 val = hoy_letras
@@ -242,11 +305,16 @@ def _sustituir_campos_plantilla(texto_base: str, valores: dict, notario_def: str
             if campo.startswith("dpi"):
                 cui = normalizar_dpi(val)
                 if len(cui) == 13:
-                    val = dpi_a_letras(cui, incluir_digitos=True)
+                    val = dpi_a_letras(cui, incluir_digitos=not es_protocolo)
             elif any(k in campo for k in ("monto", "precio", "renta", "deposito", "pension", "total_adeudado")):
-                limpio_num = val.replace("Q", "").replace("q", "").replace(",", "").strip()
+                limpio_num = re.sub(r"^[Qq]\.?\s*", "", val).replace(",", "").strip()
                 if re.match(r"^\d+(\.\d{1,2})?$", limpio_num):
-                    val = monto_a_letras(float(limpio_num), "GTQ", incluir_cifra=True)
+                    val = monto_a_letras(float(limpio_num), "GTQ", incluir_cifra=not es_protocolo)
+            elif campo in campos_entero_protocolo and re.match(r"^\d{1,9}$", val.replace(",", "")):
+                num_letras = entero_a_letras(int(val.replace(",", "")))
+                val = num_letras.upper() if campo == "numero_escritura" else num_letras
+            elif campo in ("fecha_origen", "fecha_matrimonio", "fecha_vencimiento") and re.match(r"^\d{2,4}[-/]\d{2}[-/]\d{2,4}$", val):
+                val = fecha_a_letras(val)
 
         texto = texto.replace(f"{{{campo}}}", val)
     return texto
@@ -268,7 +336,21 @@ def login():
             if st.form_submit_button("Ingresar al Despacho", use_container_width=True, type="primary"):
                 res = autenticar_usuario(u.strip(), p)
                 if res:
-                    st.session_state.update({"auth": True, "user": res})
+                    st.session_state.clear()
+                    st.session_state.update(
+                        {
+                            "auth": True,
+                            "user": res,
+                            "data": [],
+                            "analisis_completado": False,
+                            "uploader_key": 0,
+                            "all_raw_responses": {},
+                            "notario_nombre": res.get("notario_nombre", ""),
+                            "notario_colegiado": res.get("notario_colegiado", ""),
+                            "notario_clave": res.get("notario_clave", ""),
+                            "sede_notarial": res.get("sede_notarial", "la ciudad de Guatemala"),
+                        }
+                    )
                     st.rerun()
                 else:
                     st.error("🚨 Credenciales inválidas. Verifique con administración.")
@@ -283,33 +365,51 @@ def main():
         st.caption(f"Profesional Activo: **{abogado_activo}**\n\nNivel: `{user['rol']}`")
         st.write("---")
 
-        with st.expander("🖋️ Sello y Datos del Notario", expanded=False):
-            st.session_state["notario_nombre"] = st.text_input(
-                "Nombre del Abogado y Notario:",
-                value=st.session_state.get("notario_nombre", ""),
-                placeholder="Ej. Lic. Carlos Méndez Pérez",
-            )
-            st.session_state["notario_colegiado"] = st.text_input(
-                "No. Colegiado Activo:",
-                value=st.session_state.get("notario_colegiado", ""),
-                placeholder="Ej. 24510",
-            )
-            st.session_state["notario_clave"] = st.text_input(
-                "Clave de Notario (AGP):",
-                value=st.session_state.get("notario_clave", ""),
-                placeholder="Ej. M-1842",
-            )
+        with st.expander("🖋️ Sello y Datos del Notario (Guardado)", expanded=False):
+            with st.form("form_perfil_notario"):
+                n_nom = st.text_input(
+                    "Nombre del Abogado y Notario:",
+                    value=st.session_state.get("notario_nombre", ""),
+                    placeholder="Ej. Lic. Carlos Méndez Pérez",
+                )
+                n_col = st.text_input(
+                    "No. Colegiado Activo:",
+                    value=st.session_state.get("notario_colegiado", ""),
+                    placeholder="Ej. 24510",
+                )
+                n_clv = st.text_input(
+                    "Clave de Notario (AGP):",
+                    value=st.session_state.get("notario_clave", ""),
+                    placeholder="Ej. M-1842",
+                )
+                n_sede = st.text_input(
+                    "Sede / Lugar de Autorización:",
+                    value=st.session_state.get("sede_notarial", "la ciudad de Guatemala"),
+                    placeholder="Ej. la ciudad de Quetzaltenango",
+                )
+                if st.form_submit_button("💾 Guardar Sello en Mi Perfil", use_container_width=True):
+                    actualizar_perfil_notario(abogado_activo, bufete, n_nom, n_col, n_clv, n_sede)
+                    st.session_state["notario_nombre"] = n_nom.strip()
+                    st.session_state["notario_colegiado"] = n_col.strip()
+                    st.session_state["notario_clave"] = n_clv.strip()
+                    st.session_state["sede_notarial"] = n_sede.strip() or "la ciudad de Guatemala"
+                    st.success("✅ Perfil notarial guardado.")
 
         with st.expander("🔐 Seguridad y Clave"):
             with st.form("form_clave"):
-                np = st.text_input("Nueva Contraseña", type="password")
-                cp = st.text_input("Confirmar", type="password")
+                p_actual = st.text_input("Contraseña Actual", type="password")
+                np = st.text_input("Nueva Contraseña (mín. 8 caracteres)", type="password")
+                cp = st.text_input("Confirmar Nueva Contraseña", type="password")
                 if st.form_submit_button("Actualizar", use_container_width=True):
-                    if np and np == cp:
-                        actualizar_password(abogado_activo, np, empresa=bufete)
-                        st.success("¡Clave actualizada!")
+                    if not autenticar_usuario(abogado_activo, p_actual):
+                        st.error("La contraseña actual es incorrecta.")
+                    elif len(np) < 8:
+                        st.error("La nueva contraseña debe tener al menos 8 caracteres.")
+                    elif np != cp:
+                        st.error("Las nuevas contraseñas no coinciden.")
                     else:
-                        st.error("Las claves no coinciden.")
+                        actualizar_password(abogado_activo, np, empresa=bufete, actor=abogado_activo)
+                        st.success("¡Clave actualizada!")
 
         st.write("---")
         if st.button("🗑️ Limpiar Mesa de Trabajo", use_container_width=True):
@@ -318,12 +418,13 @@ def main():
             st.rerun()
 
         if st.button("🚪 Cerrar Sesión", use_container_width=True):
-            st.session_state.update({"auth": False, "user": None})
+            st.session_state.clear()
             st.rerun()
 
     notario_cfg = st.session_state.get("notario_nombre", "").strip()
     colegiado_cfg = st.session_state.get("notario_colegiado", "").strip()
     clave_cfg = st.session_state.get("notario_clave", "").strip()
+    sede_cfg = st.session_state.get("sede_notarial", "la ciudad de Guatemala").strip() or "la ciudad de Guatemala"
 
     st.title(f"Centro de Operaciones Notariales y Forenses — {bufete}")
     tabs_nombres = [
@@ -336,6 +437,8 @@ def main():
     if es_admin:
         tabs_nombres.append("⚙️ Administración")
     tabs = st.tabs(tabs_nombres)
+
+    hist_bufete = _historial_cacheado(bufete)
 
     # =========================================================================
     # PESTAÑA 1: EXTRACCIÓN Y AUDITORÍA MULTIMODAL
@@ -360,8 +463,8 @@ def main():
 
                 for i, file in enumerate(uploaded_files):
                     status.text(f"Auditando documento {i+1} de {len(uploaded_files)}: {file.name}...")
-                    safe_name = os.path.basename(file.name)
-                    temp_path = f"temp_{uuid.uuid4().hex}_{safe_name}"
+                    ext_orig = os.path.splitext(file.name)[1].lower()
+                    temp_path = os.path.join(tempfile.gettempdir(), f"lex_{uuid.uuid4().hex}{ext_orig}")
                     try:
                         with open(temp_path, "wb") as tmp:
                             tmp.write(file.getbuffer())
@@ -377,13 +480,13 @@ def main():
                     bar.progress((i + 1) / len(uploaded_files))
 
                     if i < len(uploaded_files) - 1:
-                        time.sleep(1.5)
+                        time.sleep(1.0)
 
                 status.empty()
 
                 if res_temp:
                     df_chk = pd.DataFrame(res_temp)
-                    dups = df_chk.duplicated(subset=["numero_expediente", "folio_protocolo"], keep=False)
+                    dups = df_chk.duplicated(subset=["numero_expediente", "folio_protocolo", "anio_fiscal"], keep=False)
                     for idx, is_dup in enumerate(dups):
                         if is_dup and df_chk.iloc[idx]["numero_expediente"] not in ["No detectado", "N/A"]:
                             if res_temp[idx]["anomalia"] == "ninguna":
@@ -392,8 +495,9 @@ def main():
                                 res_temp[idx]["anomalia"] += " | ⚠️ POSIBLE DUPLICADO"
 
                 guardadas, omitidas = guardar_expedientes(res_temp, bufete, abogado_activo)
+                st.cache_data.clear()
                 st.success(
-                    f"✅ Auditoría completada: {guardadas} registros indexados ({omitidas} omitidos por preexistencia)."
+                    f"✅ Auditoría completada: {guardadas} registros indexados ({omitidas} omitidos por preexistencia en el mismo año)."
                 )
 
                 st.session_state.update(
@@ -416,39 +520,20 @@ def main():
             st.subheader("📋 Matriz Consolidada de Instrumentos y Resoluciones")
 
             cols_mostrar = [
-                "semaforo",
-                "categoria_documental",
-                "numero_expediente",
-                "folio_protocolo",
-                "fecha_resolucion",
-                "juzgado",
-                "tipo_proceso",
-                "demandante",
-                "dpi_demandante",
-                "demandado",
-                "dpi_demandado",
-                "monto_litigio",
-                "timbre_notarial",
-                "registro_destino",
-                "anomalia",
+                "semaforo", "categoria_documental", "numero_expediente", "folio_protocolo",
+                "fecha_resolucion", "juzgado", "tipo_proceso", "demandante", "dpi_demandante",
+                "demandado", "dpi_demandado", "datos_registrales", "monto_litigio",
+                "timbre_notarial", "registro_destino", "anomalia",
             ]
+            for c_m in cols_mostrar:
+                if c_m not in df_raw.columns:
+                    df_raw[c_m] = "N/A"
             df_view = df_raw[cols_mostrar].copy()
             df_view.columns = [
-                "Semáforo",
-                "Categoría",
-                "No. Instrumento / Caso",
-                "Folio (A/R)",
-                "Fecha",
-                "Notario / Juzgado",
-                "Acto o Juicio",
-                "Otorgante 1 / Actor",
-                "DPI 1",
-                "Otorgante 2 / Demandado",
-                "DPI 2",
-                "Cuantía (Q)",
-                "Timbre Notarial (Q)",
-                "Destino Registral",
-                "Alertas",
+                "Semáforo", "Categoría", "No. Instrumento / Caso", "Folio (A/R)",
+                "Fecha", "Notario / Juzgado", "Acto o Juicio", "Otorgante 1 / Actor",
+                "DPI 1", "Otorgante 2 / Demandado", "DPI 2", "Datos Registrales",
+                "Cuantía (Q)", "Timbre Notarial (Q)", "Destino Registral", "Alertas",
             ]
             st.dataframe(df_view, use_container_width=True, hide_index=True)
 
@@ -466,7 +551,7 @@ def main():
             with c_down2:
                 if st.button("🔄 Analizar Nuevo Lote de Expedientes", use_container_width=True):
                     st.session_state["uploader_key"] += 1
-                    st.session_state.update({"data": [], "analisis_completado": False})
+                    st.session_state.update({"data": [], "analisis_completado": False, "all_raw_responses": {}})
                     st.rerun()
 
             if uploaded_files:
@@ -482,14 +567,14 @@ def main():
                                     st.image(f, caption=f.name, use_container_width=True)
                                 elif f.name.lower().endswith("pdf"):
                                     try:
-                                        doc = fitz.open(stream=f.getvalue(), filetype="pdf")
-                                        for p_no in range(min(6, len(doc))):
-                                            pix = doc.load_page(p_no).get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
-                                            st.image(
-                                                pix.tobytes("png"),
-                                                caption=f"Página {p_no+1}",
-                                                use_container_width=True,
-                                            )
+                                        with fitz.open(stream=f.getvalue(), filetype="pdf") as doc:
+                                            for p_no in range(min(6, len(doc))):
+                                                pix = doc.load_page(p_no).get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+                                                st.image(
+                                                    pix.tobytes("png"),
+                                                    caption=f"Página {p_no+1}",
+                                                    use_container_width=True,
+                                                )
                                     except Exception:
                                         st.warning("No se pudo previsualizar el PDF.")
                             break
@@ -501,18 +586,18 @@ def main():
                     st.code(all_raw.get(sel_raw, "Sin datos"), language="json")
 
     # =========================================================================
-    # PESTAÑA 2: GENERADOR DE PLANTILLAS Y MINUTAS (FORMATO PROTOCOLO 25 LÍNEAS)
+    # PESTAÑA 2: GENERADOR DE PLANTILLAS Y MINUTAS (PROTOCOLO / ACTA / MEMORIAL)
     # =========================================================================
     with tabs[1]:
-        st.header("🏛️ Generador de Minutas y Memoriales (Formato Oficial Guatemala)")
+        st.header("🏛️ Generador de Minutas, Actas y Memoriales (Formato Oficial Guatemala)")
         st.markdown(
-            "Seleccione la rama del derecho y la plantilla. El sistema calibra **Hoja Oficio 8.5\" x 13\" con 25 líneas exactas** "
-            "para Papel Sellado Especial de Protocolo (4 cm costura / 2 cm derecho, sin renglones en blanco) o formato de "
-            "**Memorial Judicial** (Art. 61 CPCyM). Si ingresa DPIs o montos en números, el sistema los escribe automáticamente **en letras y cifras**."
+            "Calibra **Hoja Oficio 8.5\" x 13\" a 25 líneas exactas con márgenes espejo (`mirrorMargins`)** para Protocolo "
+            "(Art. 9 y 13 CDN), formato dedicado de **Acta Notarial** (Arts. 60–62 CDN) y **Memorial Judicial** (Art. 61 CPCyM). "
+            "DPIs, montos y números de escritura/finca/folio/libro ingresados en cifras se convierten automáticamente a **letras**."
         )
 
         ramas_disponibles = {
-            "📜 Notarial (Protocolo)": "NOTARIAL",
+            "📜 Notarial (Protocolo y Actas)": "NOTARIAL",
             "⚖️ Civil y Mercantil": "CIVIL",
             "👨‍👩‍👧‍👦 Derecho de Familia": "FAMILIA",
             "🛡️ Derecho Penal": "PENAL",
@@ -526,7 +611,6 @@ def main():
         clave_cat = ramas_disponibles[rama_sel]
         lista_5_plantillas = CATALOGO_PLANTILLAS[clave_cat]
 
-        st.markdown(f"### 📋 Los 5 Instrumentos / Memoriales Más Comunes en `{rama_sel}`")
         nombres_pills = [
             f"#{i+1} {p['nombre'].split('(')[0].strip()[:35]}..."
             for i, p in enumerate(lista_5_plantillas)
@@ -540,8 +624,13 @@ def main():
                     f"**🏛️ Soporte de Ley:** `{pl['soporte']}`  \n**🎯 Objeto Legal:** {pl['descripcion']}"
                 )
 
+                es_proto = clave_cat == "NOTARIAL" and "Protocolo" in pl["soporte"]
+                es_acta = clave_cat == "NOTARIAL" and "Acta Notarial" in pl["soporte"]
+                es_exhib = pl["id"] == "pen_exhibicion_personal"
+                es_denuncia = pl["id"] == "pen_denuncia_mp"
+
                 with st.form(f"form_generar_{pl['id']}"):
-                    st.markdown("**✏️ Datos del Caso (DPI y montos numéricos se convierten a letras automáticamente):**")
+                    st.markdown("**✏️ Datos del Caso (DPI, números de protocolo y montos se convierten a letras):**")
                     col1, col2 = st.columns(2)
                     valores = {}
 
@@ -550,14 +639,14 @@ def main():
                         nombre_etiqueta = campo.replace("_", " ").title()
                         placeholder = ""
                         default_v = ""
-                        if campo == "notario" and notario_cfg:
+                        if campo in ("notario", "abogado_auxiliante", "defensor_nombre", "abogado_defensor") and notario_cfg:
                             default_v = notario_cfg
                         elif campo.startswith("dpi"):
                             placeholder = "Ej. 2456 78901 0101 (se convierte a letras)"
                         elif campo in ("lugar_y_fecha_letras", "ciudad_y_fecha"):
-                            default_v = f"la ciudad de Guatemala, el {fecha_a_letras()}"
+                            default_v = f"{sede_cfg}, el {fecha_a_letras()}"
                         elif campo in ("hora_letras", "hora_cierre"):
-                            placeholder = "Si queda vacío usa la hora actual en letras"
+                            placeholder = "Si queda vacío usa hora actual de Guatemala en letras"
                         with target_col:
                             valores[campo] = st.text_input(
                                 f"{nombre_etiqueta}:",
@@ -565,6 +654,14 @@ def main():
                                 placeholder=placeholder,
                                 key=f"inp_{pl['id']}_{campo}",
                             )
+
+                    firma_ruego = False
+                    if not es_proto and not es_acta and not es_exhib and not es_denuncia:
+                        firma_ruego = st.checkbox(
+                            "Firma a ruego del presentado (marcar solo si el cliente no puede firmar en este acto)",
+                            value=False,
+                            key=f"ruego_{pl['id']}",
+                        )
 
                     btn_generar = st.form_submit_button(
                         f"🚀 Generar {pl['nombre'][:25]}... en Word",
@@ -574,34 +671,45 @@ def main():
 
                 if btn_generar:
                     texto_completo = _sustituir_campos_plantilla(
-                        pl["redaccion"], valores, notario_cfg
+                        pl["redaccion"],
+                        valores,
+                        notario_cfg,
+                        sede_def=sede_cfg,
+                        es_protocolo=es_proto,
                     )
 
-                    if clave_cat == "NOTARIAL" and "Protocolo" in pl["soporte"]:
+                    if es_proto:
                         doc_bytes = generar_documento_protocolo_espanol(pl["nombre"], texto_completo)
                         nombre_doc = f"Protocolo_25Lineas_{pl['id']}.docx"
-                    else:
-                        juz_nombre = valores.get(
-                            "juzgado",
-                            valores.get(
-                                "juzgado_familia",
-                                valores.get("juzgado_penal", "SEÑOR JUEZ DE PRIMERA INSTANCIA"),
-                            ),
+                    elif es_acta:
+                        doc_bytes = generar_documento_acta_notarial(
+                            pl["nombre"], texto_completo, notario_abogado=notario_cfg, colegiado=colegiado_cfg
                         )
+                        nombre_doc = f"Acta_Notarial_{pl['id']}.docx"
+                    else:
+                        juz_raw = (
+                            valores.get("juzgado")
+                            or valores.get("juzgado_familia")
+                            or valores.get("juzgado_penal")
+                            or ""
+                        ).strip()
                         doc_bytes = generar_documento_memorial_judicial(
                             pl["nombre"],
                             texto_completo,
-                            juz_nombre,
+                            juz_raw,
                             notario_abogado=notario_cfg,
                             colegiado=colegiado_cfg,
+                            es_exhibicion_personal=es_exhib,
+                            es_denuncia_mp=es_denuncia,
+                            firma_a_ruego=firma_ruego,
                         )
                         nombre_doc = f"Memorial_{pl['id']}.docx"
 
-                    st.success("✅ ¡Minuta generada conforme al formato legal de Guatemala!")
+                    st.success("✅ ¡Documento generado conforme al formato legal vigente de Guatemala!")
                     st.download_button(
                         label=f"📥 Descargar '{pl['nombre']}' (.docx)",
                         data=doc_bytes,
-                        file_name=nombre_doc,
+                        file_name=sanitizar_nombre_archivo(nombre_doc),
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         type="primary",
                         use_container_width=True,
@@ -617,15 +725,13 @@ def main():
     with tabs[2]:
         st.header("📝 Generador de Avisos Notariales, RENAP y Calculadoras Fiscales GT")
         st.markdown(
-            "Emite los avisos obligatorios de ley en Word (`.docx`) con **DPI escrito en letras y dígitos**, "
-            "cantidades en letras y cifras, fechas actuales en español y aranceles vigentes."
+            "Emite los avisos obligatorios de ley en Word (`.docx`) con **DPI escrito en letras y dígitos (`espacio`)**, "
+            "cantidades en letras y cifras, hora oficial de Guatemala (UTC-6) y aranceles vigentes."
         )
 
         registros = st.session_state.get("data", [])
-        if not registros:
-            hist_db = obtener_historial(bufete)
-            if not hist_db.empty:
-                registros = hist_db.to_dict("records")
+        if not registros and not hist_bufete.empty:
+            registros = hist_bufete.to_dict("records")
 
         reg_sel = {}
         sel_idx = 0
@@ -642,136 +748,158 @@ def main():
             reg_sel = registros[sel_idx]
         else:
             st.info(
-                "No hay documentos cargados aún; puede llenar los campos manualmente aquí abajo o procesar primero un PDF/imagen en la Pestaña 1."
+                "No hay documentos cargados aún; puede llenar los campos manualmente abajo o procesar primero un PDF/imagen en la Pestaña 1."
             )
 
-        notario_aviso = notario_cfg or str(reg_sel.get("juzgado") or "").strip()
+        notario_reg = (
+            str(reg_sel.get("juzgado") or "").strip()
+            if "PROTOCOLO" in str(reg_sel.get("categoria_documental", ""))
+            else ""
+        )
+        notario_aviso = notario_cfg or notario_reg
         if not notario_aviso or notario_aviso == "No detectado":
             notario_aviso = st.text_input(
                 "Nombre del Notario para los Avisos:",
                 key="av_notario_manual",
-                placeholder="Configúrelo también en la barra lateral izquierda",
+                placeholder="Configúrelo de forma permanente en la barra lateral izquierda",
             )
 
         st.write("---")
         c_av1, c_av2 = st.columns(2)
 
         with c_av1:
-            st.subheader("🏛️ Avisos Obligatorios (AGP y DICABI)")
+            st.subheader("🏛️ Avisos Obligatorios (DICABI, AGP y RENAP)")
 
-            with st.expander("📍 Aviso Notarial de Traspaso DICABI / Catastro (Art. 38 CDN)", expanded=True):
+            with st.expander("📍 Aviso Notarial de Traspaso DICABI / IUSI (Art. 38 CDN / Art. 43 Dto. 15-98)", expanded=True):
                 st.caption(f"Plazo: {PLAZOS_NOTARIALES_GT['DICABI']}")
-                num_esc_d = st.text_input("No. Escritura Pública:", str(reg_sel.get("numero_expediente", "1")), key=f"d_num_{sel_idx}")
-                fecha_d = st.text_input("Fecha Escritura (DD/MM/AAAA):", str(reg_sel.get("fecha_resolucion") or datetime.date.today().strftime("%d/%m/%Y")), key=f"d_fec_{sel_idx}")
-                vend_nom = st.text_input("Vendedor (Enajenante):", str(reg_sel.get("demandante", "")), key=f"d_vnd_{sel_idx}")
+                if reg_sel.get("datos_registrales") and reg_sel.get("datos_registrales") != "N/A":
+                    st.info(f"Datos registrales detectados por OCR: {reg_sel.get('datos_registrales')}")
+                num_esc_d = st.text_input("No. Escritura Pública:", str(reg_sel.get("numero_expediente") or ""), key=f"d_num_{sel_idx}")
+                fecha_d = st.text_input("Fecha Escritura (DD/MM/AAAA):", str(reg_sel.get("fecha_resolucion") or hoy_gt().strftime("%d/%m/%Y")), key=f"d_fec_{sel_idx}")
+                vend_nom = st.text_input("Vendedor (Enajenante):", str(reg_sel.get("demandante") or ""), key=f"d_vnd_{sel_idx}")
                 dpi_v = st.text_input("DPI Vendedor (13 dígitos):", formatear_dpi_espaciado(reg_sel.get("dpi_demandante", "")), key=f"d_dpiv_{sel_idx}")
-                nit_v = st.text_input("NIT Vendedor:", str(reg_sel.get("nit_demandante", "CF")), key=f"d_nitv_{sel_idx}")
-                comp_nom = st.text_input("Comprador (Adquirente):", str(reg_sel.get("demandado", "")), key=f"d_cmp_{sel_idx}")
+                nit_v = st.text_input("NIT Vendedor:", str(reg_sel.get("nit_demandante") or "CF"), key=f"d_nitv_{sel_idx}")
+                comp_nom = st.text_input("Comprador (Adquirente):", str(reg_sel.get("demandado") or ""), key=f"d_cmp_{sel_idx}")
                 dpi_c = st.text_input("DPI Comprador (13 dígitos):", formatear_dpi_espaciado(reg_sel.get("dpi_demandado", "")), key=f"d_dpic_{sel_idx}")
-                nit_c = st.text_input("NIT Comprador:", str(reg_sel.get("nit_demandado", "CF")), key=f"d_nitc_{sel_idx}")
-                monto_d = st.number_input("Precio Pactado (Q):", min_value=0.0, value=float(reg_sel.get("monto_litigio", 0.0) or 0.0), step=100.0, key=f"d_mnt_{sel_idx}")
+                nit_c = st.text_input("NIT Comprador:", str(reg_sel.get("nit_demandado") or "CF"), key=f"d_nitc_{sel_idx}")
+                monto_d = st.number_input("Precio Pactado (Q):", min_value=0.0, value=float(reg_sel.get("monto_litigio") or 0.0), step=100.0, key=f"d_mnt_{sel_idx}")
                 col_f1, col_f2, col_f3 = st.columns(3)
-                finca = col_f1.text_input("Finca:", "1234", key=f"finca_{sel_idx}")
-                folio = col_f2.text_input("Folio:", "25", key=f"folio_{sel_idx}")
-                libro = col_f3.text_input("Libro:", "89", key=f"libro_{sel_idx}")
+                finca = col_f1.text_input("Finca:", "", placeholder="Ej. 450", key=f"finca_{sel_idx}")
+                folio = col_f2.text_input("Folio:", "", placeholder="Ej. 12", key=f"folio_{sel_idx}")
+                libro = col_f3.text_input("Libro:", "", placeholder="Ej. 205", key=f"libro_{sel_idx}")
                 depto_reg = st.text_input("Departamento Registro:", "Guatemala", key=f"d_dep_{sel_idx}")
+                area_inm = st.text_input("Área / Extensión del Inmueble:", "", placeholder="Ej. 180.00 metros cuadrados", key=f"d_area_{sel_idx}")
                 dir_inm = st.text_input("Dirección del Inmueble:", "", placeholder="Ej. 5a calle 12-40 zona 10, Guatemala", key=f"d_dir_{sel_idx}")
-                mat_fisc = st.text_input("Matrícula Fiscal (si consta):", "En trámite", key=f"d_mat_{sel_idx}")
+                col_m1, col_m2 = st.columns(2)
+                mat_fisc = col_m1.text_input("Matrícula Fiscal:", "En trámite", key=f"d_mat_{sel_idx}")
+                val_mat = col_m2.text_input("Valor en Matrícula Fiscal:", "", placeholder="Ej. Q. 150,000.00", key=f"d_vmat_{sel_idx}")
 
-                datos_dicabi = {
-                    "notario": notario_aviso,
-                    "colegiado": colegiado_cfg,
-                    "clave_notario": clave_cfg,
-                    "numero_instrumento": num_esc_d,
-                    "fecha": fecha_d,
-                    "tipo_contrato": reg_sel.get("tipo_proceso", "Compraventa de Bien Inmueble"),
-                    "vendedor": vend_nom,
-                    "dpi_vendedor": dpi_v,
-                    "nit_vendedor": nit_v,
-                    "comprador": comp_nom,
-                    "dpi_comprador": dpi_c,
-                    "nit_comprador": nit_c,
-                    "monto": monto_d,
-                    "finca": finca,
-                    "folio": folio,
-                    "libro": libro,
-                    "departamento_registro": depto_reg,
-                    "direccion_inmueble": dir_inm,
-                    "matricula_fiscal": mat_fisc,
-                }
-                doc_bytes_dicabi = generar_aviso_dicabi(datos_dicabi)
-                st.download_button(
-                    "📄 Descargar Aviso DICABI con DPI en Letras (.docx)",
-                    doc_bytes_dicabi,
-                    f"Aviso_DICABI_Escritura_{num_esc_d or '1'}.docx",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    type="primary",
-                    use_container_width=True,
-                )
+                if st.button("📄 Preparar Aviso DICABI (.docx)", type="primary", use_container_width=True, key=f"prep_dic_{sel_idx}"):
+                    doc_bytes_dicabi = generar_aviso_dicabi({
+                        "notario": notario_aviso, "colegiado": colegiado_cfg, "clave_notario": clave_cfg,
+                        "sede_notarial": sede_cfg, "numero_instrumento": num_esc_d, "fecha": fecha_d,
+                        "tipo_contrato": reg_sel.get("tipo_proceso", "Compraventa de Bien Inmueble"),
+                        "vendedor": vend_nom, "dpi_vendedor": dpi_v, "nit_vendedor": nit_v,
+                        "comprador": comp_nom, "dpi_comprador": dpi_c, "nit_comprador": nit_c,
+                        "monto": monto_d, "finca": finca, "folio": folio, "libro": libro,
+                        "departamento_registro": depto_reg, "area_inmueble": area_inm,
+                        "direccion_inmueble": dir_inm, "matricula_fiscal": mat_fisc, "valor_matricula": val_mat,
+                    })
+                    st.download_button(
+                        "📥 Descargar Aviso DICABI con DPI en Letras (.docx)",
+                        doc_bytes_dicabi,
+                        sanitizar_nombre_archivo(f"Aviso_DICABI_Escritura_{num_esc_d or '1'}.docx"),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        type="primary",
+                        use_container_width=True,
+                    )
 
             with st.expander("📜 Razón Testimonio Especial AGP (Art. 37 lit. a CDN)"):
                 st.caption(f"Plazo: {PLAZOS_NOTARIALES_GT['TESTIMONIO_ESPECIAL']}")
-                fol_ini = st.text_input("Folio Inicial:", str(reg_sel.get("folio_protocolo", "1")), key=f"fini_{sel_idx}")
-                fol_fin = st.text_input("Folio Final:", "2", key=f"ffin_{sel_idx}")
-                hojas_te = st.number_input("Cantidad de hojas del Testimonio (Q.0.50 timbre/hoja):", min_value=1, value=2, step=1, key=f"hojas_te_{sel_idx}")
-
-                datos_agp = {
-                    "notario": notario_aviso,
-                    "colegiado": colegiado_cfg,
-                    "clave_notario": clave_cfg,
-                    "numero_instrumento": num_esc_d,
-                    "fecha": fecha_d,
-                    "tipo_contrato": reg_sel.get("tipo_proceso", "Instrumento Público"),
-                    "otorgantes": f"{vend_nom} y {comp_nom}",
-                    "dpi_vendedor": dpi_v,
-                    "dpi_comprador": dpi_c,
-                    "folio_inicial": fol_ini,
-                    "folio_final": fol_fin,
-                    "hojas_testimonio": hojas_te,
-                    "monto": monto_d,
-                    "timbre_notarial": reg_sel.get("timbre_notarial", 0.0),
-                }
-                doc_bytes_agp = generar_aviso_agp_testimonio(datos_agp)
-                st.download_button(
-                    "📄 Descargar Entrega Testimonio Especial (.docx)",
-                    doc_bytes_agp,
-                    f"Testimonio_Especial_{num_esc_d or '1'}.docx",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
+                fol_ini = st.text_input("Folio Inicial:", str(reg_sel.get("folio_protocolo") or ""), placeholder="Ej. 1", key=f"fini_{sel_idx}")
+                fol_fin = st.text_input("Folio Final:", "", placeholder="Ej. 3", key=f"ffin_{sel_idx}")
+                hojas_te = st.number_input("Cantidad de hojas del Testimonio (Q.0.50 en CADA hoja):", min_value=1, value=2, step=1, key=f"hojas_te_{sel_idx}")
+                sist_comp = st.selectbox(
+                    "Sistema de Compulsación:",
+                    ["Reproducción en fotocopias impresas en anverso y reverso, más la presente hoja de razón", "Transcripción literal íntegra"],
+                    key=f"scomp_{sel_idx}",
                 )
+                if st.button("📄 Preparar Testimonio Especial (.docx)", use_container_width=True, key=f"prep_agp_{sel_idx}"):
+                    doc_bytes_agp = generar_aviso_agp_testimonio({
+                        "notario": notario_aviso, "colegiado": colegiado_cfg, "clave_notario": clave_cfg,
+                        "sede_notarial": sede_cfg, "numero_instrumento": num_esc_d, "fecha": fecha_d,
+                        "tipo_contrato": reg_sel.get("tipo_proceso", "Instrumento Público"),
+                        "otorgantes": f"{vend_nom} y {comp_nom}", "dpi_vendedor": dpi_v, "dpi_comprador": dpi_c,
+                        "folio_inicial": fol_ini, "folio_final": fol_fin, "hojas_testimonio": hojas_te,
+                        "monto": monto_d, "sistema_compulsa": sist_comp,
+                    })
+                    st.download_button(
+                        "📥 Descargar Entrega Testimonio Especial (.docx)",
+                        doc_bytes_agp,
+                        sanitizar_nombre_archivo(f"Testimonio_Especial_{num_esc_d or '1'}.docx"),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
 
-            with st.expander("💒 Aviso Circunstanciado Matrimonio Civil RENAP (Art. 102 CC)"):
+            with st.expander("🚫 Aviso de Instrumento Cancelado AGP (Art. 37 lit. b CDN)"):
+                st.caption(f"Plazo: {PLAZOS_NOTARIALES_GT['AVISO_CANCELACION']}")
+                c_num = st.text_input("No. Escritura Cancelada:", key="canc_num")
+                c_fol = st.text_input("Folio(s) ocupados:", key="canc_fol")
+                c_fec = st.date_input("Fecha de Cancelación:", value=hoy_gt(), key="canc_fec")
+                c_mot = st.text_input("Motivo de Cancelación:", "Desistimiento o falta de firma de los comparecientes", key="canc_mot")
+                if st.button("📄 Preparar Aviso de Cancelación (.docx)", use_container_width=True, key="prep_canc"):
+                    doc_canc = generar_aviso_cancelacion_agp({
+                        "notario": notario_aviso, "colegiado": colegiado_cfg, "clave_notario": clave_cfg,
+                        "sede_notarial": sede_cfg, "numero_instrumento": c_num, "folios": c_fol,
+                        "fecha_cancelacion": c_fec, "motivo": c_mot,
+                    })
+                    st.download_button(
+                        "📥 Descargar Aviso de Cancelación (.docx)",
+                        doc_canc,
+                        sanitizar_nombre_archivo(f"Aviso_Cancelacion_Escritura_{c_num or 'SN'}.docx"),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
+
+            with st.expander("💒 Aviso Circunstanciado Matrimonio Civil RENAP (Art. 102 CC / Art. 84 RENAP)"):
                 st.caption(f"Plazo: {PLAZOS_NOTARIALES_GT['MATRIMONIO_RENAP']}")
                 mc1, mc2 = st.text_input("Contrayente 1 (Varón):", key="renap_c1"), st.text_input("DPI Contrayente 1:", key="renap_d1")
+                mg1 = st.text_input("Generales 1 (edad, estado anterior, nacionalidad, profesión):", key="renap_g1")
+                mp1 = st.text_input("Padres y Partida de Nacimiento 1 (Partida/Folio/Libro):", key="renap_p1")
                 mc3, mc4 = st.text_input("Contrayente 2 (Mujer):", key="renap_c2"), st.text_input("DPI Contrayente 2:", key="renap_d2")
+                mg2 = st.text_input("Generales 2 (edad, estado anterior, nacionalidad, profesión):", key="renap_g2")
+                mp2 = st.text_input("Padres y Partida de Nacimiento 2 (Partida/Folio/Libro):", key="renap_p2")
                 reg_ec = st.selectbox(
                     "Régimen Económico:",
-                    ["Comunidad de Gananciales", "Separación Absoluta de Bienes", "Comunidad Absoluta de Bienes"],
+                    [
+                        "Comunidad de Gananciales (subsidiario legal, Art. 126 Código Civil)",
+                        "Separación Absoluta de Bienes (Art. 123 Código Civil)",
+                        "Comunidad Absoluta de Bienes (Art. 122 Código Civil)",
+                    ],
                     key="renap_reg",
                 )
-                muni_cel = st.text_input("Municipio/Depto celebración:", "Guatemala, Guatemala", key="renap_mun")
-                fecha_m = st.date_input("Fecha del matrimonio:", value=datetime.date.today(), key="renap_fec")
-                doc_renap = generar_aviso_matrimonio_renap(
-                    {
-                        "notario": notario_aviso,
-                        "colegiado": colegiado_cfg,
-                        "clave_notario": clave_cfg,
-                        "nombre_contrayente_1": mc1 or "___",
-                        "dpi_contrayente_1": mc2,
-                        "nombre_contrayente_2": mc3 or "___",
-                        "dpi_contrayente_2": mc4,
-                        "regimen_economico": reg_ec,
-                        "municipio_celebracion": muni_cel,
-                        "fecha_matrimonio": fecha_m,
-                    }
-                )
-                st.download_button(
-                    "📄 Descargar Aviso Matrimonio RENAP (.docx)",
-                    doc_renap,
-                    "Aviso_Matrimonio_RENAP.docx",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                )
+                r_c1, r_c2 = st.columns(2)
+                muni_cel = r_c1.text_input("Municipio/Depto celebración:", "Guatemala, Guatemala", key="renap_mun")
+                hora_m = r_c2.text_input("Hora celebración (en letras):", hora_a_letras(), key="renap_hora")
+                fecha_m = st.date_input("Fecha del matrimonio:", value=hoy_gt(), key="renap_fec")
+                esc_prot = st.text_input("Escritura de Protocolización (Art. 101 CC):", "", placeholder="Ej. Escritura 15 de fecha...", key="renap_prot")
+                if st.button("📄 Preparar Aviso RENAP (.docx)", use_container_width=True, key="prep_renap"):
+                    doc_renap = generar_aviso_matrimonio_renap({
+                        "notario": notario_aviso, "colegiado": colegiado_cfg, "clave_notario": clave_cfg,
+                        "sede_notarial": sede_cfg, "nombre_contrayente_1": mc1 or "___", "dpi_contrayente_1": mc2,
+                        "generales_1": mg1, "padres_1": mp1, "nombre_contrayente_2": mc3 or "___",
+                        "dpi_contrayente_2": mc4, "generales_2": mg2, "padres_2": mp2,
+                        "regimen_economico": reg_ec, "municipio_celebracion": muni_cel,
+                        "lugar_celebracion": muni_cel, "hora_matrimonio": hora_m,
+                        "fecha_matrimonio": fecha_m, "escritura_protocolizacion": esc_prot,
+                    })
+                    st.download_button(
+                        "📥 Descargar Aviso Matrimonio RENAP (.docx)",
+                        doc_renap,
+                        "Aviso_Matrimonio_RENAP.docx",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
 
         with c_av2:
             st.subheader("📊 Ficha Ejecutiva, Trimestral y Calculadoras")
@@ -779,18 +907,19 @@ def main():
             if reg_sel:
                 with st.expander("📑 Dictamen y Resumen Ejecutivo para el Cliente / Bufete", expanded=True):
                     st.write(f"**Resumen Registrado:** {reg_sel.get('resumen_forense', 'Acto notarial formal.')}")
-                    doc_bytes_ficha = generar_resumen_juridico_ejecutivo(reg_sel)
-                    st.download_button(
-                        "📥 Descargar Ficha Ejecutiva en Word (.docx)",
-                        doc_bytes_ficha,
-                        f"Dictamen_Ejecutivo_{reg_sel.get('numero_expediente', 'caso')}.docx",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        type="primary",
-                        use_container_width=True,
-                    )
+                    if st.button("📄 Preparar Ficha Ejecutiva (.docx)", type="primary", use_container_width=True, key=f"prep_ficha_{sel_idx}"):
+                        doc_bytes_ficha = generar_resumen_juridico_ejecutivo(reg_sel)
+                        st.download_button(
+                            "📥 Descargar Ficha Ejecutiva en Word (.docx)",
+                            doc_bytes_ficha,
+                            sanitizar_nombre_archivo(f"Dictamen_Ejecutivo_{reg_sel.get('numero_expediente', 'caso')}.docx"),
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            type="primary",
+                            use_container_width=True,
+                        )
 
             with st.expander("🗓️ Aviso Notarial Trimestral AGP (Art. 37 lit. c CDN)", expanded=True):
-                st.caption(f"Plazo: {PLAZOS_NOTARIALES_GT['AVISO_TRIMESTRAL']}")
+                st.caption(f"Plazo: {PLAZOS_NOTARIALES_GT['AVISO_TRIMESTRAL']} (soporta aviso positivo o negativo si total = 0).")
                 trim_def, anio_def = trimestre_actual_info()
                 opciones_trim = [
                     "Primer Trimestre (enero a marzo)",
@@ -800,46 +929,48 @@ def main():
                 ]
                 idx_trim = opciones_trim.index(trim_def) if trim_def in opciones_trim else 0
                 trimestre = st.selectbox("Trimestre:", opciones_trim, index=idx_trim)
-                ano_t = st.text_input("Año Fiscal:", str(anio_def), key="trim_anio")
+                trim_num_sel = opciones_trim.index(trimestre) + 1
+                ano_t = st.number_input("Año Fiscal:", min_value=2000, max_value=2100, value=int(anio_def), step=1, key="trim_anio")
 
-                # Calcular rangos reales desde registros notariales de Bóveda
-                nums_proto = [
-                    int(re.sub(r"\D", "", str(r.get("numero_expediente", ""))))
-                    for r in registros
-                    if re.sub(r"\D", "", str(r.get("numero_expediente", ""))).isdigit()
-                    and "PROTOCOLO" in str(r.get("categoria_documental", ""))
-                ]
-                p_num_def = str(min(nums_proto)) if nums_proto else "1"
-                u_num_def = str(max(nums_proto)) if nums_proto else "1"
-                tot_def = str(len(nums_proto)) if nums_proto else "0"
+                # Filtrar estrictamente registros del trimestre y año seleccionados
+                nums_proto = []
+                fechas_proto = []
+                for r in registros:
+                    if "PROTOCOLO" not in str(r.get("categoria_documental", "")):
+                        continue
+                    r_anio, r_trim = _extraer_mes_trimestre(str(r.get("fecha_resolucion") or ""))
+                    if r_anio == int(ano_t) and r_trim == trim_num_sel:
+                        dig = re.sub(r"\D", "", str(r.get("numero_expediente", "")))
+                        if dig.isdigit():
+                            nums_proto.append(int(dig))
+                            fechas_proto.append(str(r.get("fecha_resolucion") or ""))
+
+                p_num_def = str(min(nums_proto)) if nums_proto else "0"
+                u_num_def = str(max(nums_proto)) if nums_proto else "0"
+                tot_def = str(len(nums_proto))
+                f_ult_def = fechas_proto[-1] if fechas_proto else ""
 
                 t_c1, t_c2, t_c3 = st.columns(3)
-                p_num_in = t_c1.text_input("Primer Instrumento:", p_num_def, key="trim_pnum")
-                u_num_in = t_c2.text_input("Último Instrumento:", u_num_def, key="trim_unum")
-                tot_in = t_c3.text_input("Total Autorizados:", tot_def, key="trim_tot")
+                p_num_in = t_c1.text_input("Primer Instrumento:", p_num_def, key=f"trim_pnum_{ano_t}_{trim_num_sel}")
+                u_num_in = t_c2.text_input("Último Instrumento:", u_num_def, key=f"trim_unum_{ano_t}_{trim_num_sel}")
+                tot_in = t_c3.text_input("Total Autorizados (0 = Negativo):", tot_def, key=f"trim_tot_{ano_t}_{trim_num_sel}")
                 canc_in = st.text_input("Instrumentos Cancelados:", "Ninguno", key="trim_canc")
-                fec_ult = st.text_input("Fecha Último Instrumento:", datetime.date.today().strftime("%d/%m/%Y"), key="trim_fult")
+                fec_ult = st.text_input("Fecha Último Instrumento:", f_ult_def, key=f"trim_fult_{ano_t}_{trim_num_sel}")
 
-                datos_trim = {
-                    "trimestre": trimestre,
-                    "ano": ano_t,
-                    "notario": notario_aviso,
-                    "colegiado": colegiado_cfg,
-                    "clave_notario": clave_cfg,
-                    "primer_num": p_num_in,
-                    "ultimo_num": u_num_in,
-                    "total_autorizados": tot_in,
-                    "cancelados": canc_in,
-                    "fecha_ultimo": fec_ult,
-                }
-                doc_bytes_trim = generar_aviso_trimestral_agp(datos_trim)
-                st.download_button(
-                    "📄 Descargar Aviso Trimestral (.docx)",
-                    doc_bytes_trim,
-                    f"Aviso_Trimestral_{ano_t}.docx",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                )
+                if st.button("📄 Preparar Aviso Trimestral (.docx)", use_container_width=True, key="prep_trim"):
+                    doc_bytes_trim = generar_aviso_trimestral_agp({
+                        "trimestre": trimestre, "ano": str(ano_t), "notario": notario_aviso,
+                        "colegiado": colegiado_cfg, "clave_notario": clave_cfg, "sede_notarial": sede_cfg,
+                        "primer_num": p_num_in, "ultimo_num": u_num_in, "total_autorizados": tot_in,
+                        "cancelados": canc_in, "fecha_ultimo": fec_ult or None,
+                    })
+                    st.download_button(
+                        "📥 Descargar Aviso Trimestral (.docx)",
+                        doc_bytes_trim,
+                        sanitizar_nombre_archivo(f"Aviso_Trimestral_T{trim_num_sel}_{ano_t}.docx"),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
 
             with st.expander("🧮 Calculadora Notarial de Timbres y Aranceles (Guatemala)", expanded=True):
                 op_calc = st.selectbox(
@@ -850,19 +981,22 @@ def main():
                         ("PROMESA_COMPRAVENTA", "Promesa de Compraventa de Inmueble (Q.50 Fiscal fijo)"),
                         ("MANDATO_GENERAL", "Mandato General (Q.10 Fiscal + Q.10 Notarial)"),
                         ("MANDATO_ESPECIAL", "Mandato Especial (Q.2 Fiscal + Q.10 Notarial)"),
-                        ("CARTA_PAGO", "Carta Total de Pago / Liberación Hipoteca (Exenta Fiscal)"),
+                        ("CARTA_PAGO", "Carta Total de Pago / Liberación Hipoteca (Art. 11 Dto. 37-92)"),
+                        ("ACTA_NOTARIAL", "Acta Notarial (Q.10 Notarial + Q.0.50/hoja Fiscal)"),
+                        ("AUTENTICA_LEGALIZACION", "Auténtica / Legalización de Firma o Copia (Q.10 Notarial + Q.5 Fiscal)"),
+                        ("TESTAMENTO", "Testamento / Donación Mortis Causa (Q.25 Notarial)"),
                     ],
                     format_func=lambda x: x[1],
                 )
                 val_calc = st.number_input("Monto / Precio del Contrato (Q):", min_value=0.0, value=100000.0, step=1000.0, key="calc_monto")
-                hojas_calc = st.number_input("Cantidad de Hojas del Testimonio / Memorial:", min_value=1, value=3, step=1, key="calc_hojas")
+                hojas_calc = st.number_input("Cantidad de Hojas del Testimonio / Acta / Memorial:", min_value=1, value=3, step=1, key="calc_hojas")
                 res_imp = calcular_impuestos_testimonio_gt(val_calc, op_calc[0], hojas_calc)
 
                 m_c1, m_c2 = st.columns(2)
-                m_c1.metric("Impuesto 1er Testimonio", f"Q {res_imp['impuesto_primer_testimonio']:,.2f}")
-                m_c2.metric("Timbre Notarial (Test. Esp.)", f"Q {res_imp['timbre_notarial_especial']:,.2f}")
+                m_c1.metric("Impuesto Fiscal / IVA", f"Q {res_imp['impuesto_primer_testimonio']:,.2f}")
+                m_c2.metric("Timbre Notarial (Dto. 82-96)", f"Q {res_imp['timbre_notarial_especial']:,.2f}")
                 m_c3, m_c4 = st.columns(2)
-                m_c3.metric("Timbre Fiscal Razón (Q0.50/hoja)", f"Q {res_imp['timbre_fiscal_razon_especial']:,.2f}")
+                m_c3.metric("Timbre Fiscal Hojas (Q0.50/hoja)", f"Q {res_imp['timbre_fiscal_razon_especial']:,.2f}")
                 m_c4.metric("Si es Memorial: Timbre Forense", f"Q {res_imp['timbre_forense_por_hojas']:,.2f}")
                 st.caption(f"**Fiscal:** {res_imp['concepto_fiscal']}  \n**Notarial:** {res_imp['detalle_timbre_notarial']}")
 
@@ -874,31 +1008,51 @@ def main():
                         st.success(dpi_a_letras(dpi_test, incluir_digitos=True))
                     else:
                         st.warning(msg_cui)
+                monto_conv = st.number_input("Monto a Letras (Q):", min_value=0.0, value=0.0, step=100.0, key="conv_monto")
+                if monto_conv > 0:
+                    st.info(monto_a_letras(monto_conv, "GTQ", incluir_cifra=True))
+                fecha_conv = st.date_input("Fecha a Letras:", value=hoy_gt(), key="conv_fecha")
+                st.caption(f"**Fecha en letras:** {fecha_a_letras(fecha_conv)}")
 
     # =========================================================================
-    # PESTAÑA 4: ÍNDICE OFICIAL DE PROTOCOLO (ART. 92 CÓDIGO DE NOTARIADO)
+    # PESTAÑA 4: ÍNDICE OFICIAL DE PROTOCOLO (ARTS. 15 Y 16 CÓDIGO DE NOTARIADO)
     # =========================================================================
     with tabs[3]:
         st.header("📜 Generador Oficial del Índice de Protocolo Notarial")
         st.markdown(
-            "Cumple con los **Artículos 15 y 92 del Código de Notariado de Guatemala**. "
-            "Ordena numéricamente sus escrituras e incluye las 5 columnas reglamentarias, razón de cierre "
-            "y nota de **Timbre Fiscal de Q. 0.50 por hoja** (Art. 5 num. 6 Dto. 37-92)."
+            "Cumple con los **Artículos 15 y 16 del Código de Notariado de Guatemala (Dto. 314)**. "
+            "Genera el Índice en hoja **Oficio (`8.5\" x 13\"`)** ordenado numéricamente por año fiscal, con las 5 columnas "
+            "reglamentarias, razón de cierre y nota de **Timbre Fiscal de Q. 0.50 en cada hoja** (Art. 5 num. 6 Dto. 37-92)."
         )
 
-        historial = obtener_historial(bufete)
-        if not historial.empty:
-            notariales = historial[historial["categoria_documental"] == "PROTOCOLO_NOTARIAL"].copy()
+        col_idx_f1, col_idx_f2, col_idx_f3 = st.columns(3)
+        anio_indice = col_idx_f1.number_input("Año Fiscal del Protocolo:", min_value=2000, max_value=2100, value=hoy_gt().year, step=1, key="idx_anio")
+        sede_indice = col_idx_f2.text_input("Lugar / Sede de Autorización:", value=sede_cfg, key="idx_sede")
+        canc_indice = col_idx_f3.number_input("Instrumentos Cancelados en el Año:", min_value=0, value=0, step=1, key="idx_canc")
+
+        if not hist_bufete.empty:
+            notariales = hist_bufete[hist_bufete["categoria_documental"] == "PROTOCOLO_NOTARIAL"].copy()
             if notariales.empty:
-                notariales = historial[historial["folio_protocolo"] != "N/A"].copy()
+                notariales = hist_bufete[hist_bufete["folio_protocolo"] != "N/A"].copy()
+
+            if not notariales.empty:
+                if "anio_fiscal" in notariales.columns:
+                    notariales["_anio"] = notariales.apply(
+                        lambda r: int(r["anio_fiscal"]) if pd.notna(r["anio_fiscal"]) and int(r["anio_fiscal"]) > 0 else extraer_anio_fecha(r["fecha_resolucion"]),
+                        axis=1,
+                    )
+                else:
+                    notariales["_anio"] = notariales["fecha_resolucion"].map(extraer_anio_fecha)
+
+                notariales = notariales[notariales["_anio"] == int(anio_indice)].copy()
 
             if not notariales.empty:
                 notariales["_ord"] = notariales["numero_expediente"].map(_clave_orden_instrumento)
-                notariales = notariales.sort_values(by="_ord", ascending=True).drop(columns=["_ord"])
+                notariales = notariales.sort_values(by="_ord", ascending=True).drop(columns=["_ord", "_anio"], errors="ignore")
 
                 tabla_indice = pd.DataFrame()
                 tabla_indice["No. Orden"] = notariales["numero_expediente"]
-                tabla_indice["Lugar y Fecha"] = "Guatemala, " + notariales["fecha_resolucion"].astype(str)
+                tabla_indice["Lugar y Fecha"] = f"{sede_indice}, " + notariales["fecha_resolucion"].astype(str)
                 tabla_indice["Otorgantes"] = (
                     notariales["demandante"].astype(str) + " / " + notariales["demandado"].astype(str)
                 )
@@ -907,51 +1061,93 @@ def main():
 
                 st.dataframe(tabla_indice, use_container_width=True, hide_index=True)
 
+                notario_para_idx = notario_cfg or "__________________________"
                 idx_col1, idx_col2 = st.columns(2)
                 with idx_col1:
-                    indice_docx = generar_indice_protocolo_docx(
-                        notariales.to_dict("records"),
-                        anio=datetime.date.today().year,
-                        notario=notario_aviso,
-                        colegiado=colegiado_cfg,
-                        clave_notario=clave_cfg,
-                    )
-                    st.download_button(
-                        "📄 Descargar Índice Oficial Art. 92 en Word (.docx)",
-                        indice_docx,
-                        f"Indice_Protocolo_Oficial_{datetime.date.today().year}.docx",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        type="primary",
-                        use_container_width=True,
-                    )
+                    if st.button("📄 Preparar Índice Oficial en Word Oficio (.docx)", type="primary", use_container_width=True, key="prep_idx_docx"):
+                        indice_docx = generar_indice_protocolo_docx(
+                            notariales.to_dict("records"),
+                            anio=int(anio_indice),
+                            notario=notario_para_idx,
+                            colegiado=colegiado_cfg,
+                            clave_notario=clave_cfg,
+                            sede_notarial=sede_indice,
+                            total_cancelados=int(canc_indice),
+                        )
+                        st.download_button(
+                            "📥 Descargar Índice Oficial Arts. 15 y 16 (.docx Oficio)",
+                            indice_docx,
+                            sanitizar_nombre_archivo(f"Indice_Protocolo_Oficial_{anio_indice}.docx"),
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            type="primary",
+                            use_container_width=True,
+                        )
                 with idx_col2:
                     csv_indice = dataframe_a_csv_seguro(tabla_indice)
                     st.download_button(
                         "📥 Descargar Índice en CSV / Excel",
                         csv_indice,
-                        "indice_protocolo_oficial.csv",
+                        sanitizar_nombre_archivo(f"indice_protocolo_{anio_indice}.csv"),
                         "text/csv",
                         use_container_width=True,
                     )
             else:
-                st.info("Aún no ha procesado escrituras de protocolo notarial en esta bóveda.")
+                st.info(f"No hay escrituras de protocolo registradas para el año fiscal {anio_indice}.")
         else:
             st.info("Bóveda sin registros notariales.")
 
     # =========================================================================
-    # PESTAÑA 5: BÓVEDA HISTÓRICA
+    # PESTAÑA 5: BÓVEDA HISTÓRICA EDITABLE
     # =========================================================================
     with tabs[4]:
         st.header("🗄️ Bóveda Centralizada del Despacho")
-        hist = obtener_historial(bufete)
-        if not hist.empty:
-            st.dataframe(hist, use_container_width=True, hide_index=True)
-            st.download_button(
-                "📥 Exportar Toda la Bóveda a Excel/CSV",
-                dataframe_a_csv_seguro(hist),
-                "boveda_completa_despacho.csv",
-                "text/csv",
-            )
+        if not hist_bufete.empty:
+            st.dataframe(hist_bufete, use_container_width=True, hide_index=True)
+
+            with st.expander("✏️ Corregir o Eliminar un Registro de la Bóveda"):
+                ids_opts = [
+                    (int(r["id"]), f"ID {r['id']} | {r.get('numero_expediente', 'S/N')} | {r.get('tipo_proceso', '')} ({r.get('fecha_resolucion', '')})")
+                    for _, r in hist_bufete.head(150).iterrows()
+                ]
+                sel_ed = st.selectbox("Seleccione registro:", ids_opts, format_func=lambda x: x[1], key="bov_sel_ed")
+                fila_ed = hist_bufete[hist_bufete["id"] == sel_ed[0]].iloc[0]
+                with st.form("form_editar_bov_lex"):
+                    ec1, ec2, ec3 = st.columns(3)
+                    ed_num = ec1.text_input("No. Instrumento / Caso:", str(fila_ed.get("numero_expediente") or ""))
+                    ed_fol = ec2.text_input("Folio Protocolo:", str(fila_ed.get("folio_protocolo") or ""))
+                    ed_fec = ec3.text_input("Fecha (DD/MM/AAAA):", str(fila_ed.get("fecha_resolucion") or ""))
+                    ec4, ec5 = st.columns(2)
+                    ed_d1 = ec4.text_input("Otorgante 1 / Actor:", str(fila_ed.get("demandante") or ""))
+                    ed_d2 = ec5.text_input("Otorgante 2 / Demandado:", str(fila_ed.get("demandado") or ""))
+                    ed_reg = st.text_input("Datos Registrales:", str(fila_ed.get("datos_registrales") or "N/A"))
+                    ed_mnt = st.number_input("Monto / Cuantía (Q):", min_value=0.0, value=float(fila_ed.get("monto_litigio") or 0.0), step=100.0)
+                    col_b_save, col_b_del = st.columns(2)
+                    btn_save_ed = col_b_save.form_submit_button("💾 Guardar Cambios", type="primary", use_container_width=True)
+                    btn_del_ed = col_b_del.form_submit_button("🗑️ Eliminar Registro", use_container_width=True)
+
+                    if btn_save_ed:
+                        actualizar_expediente(sel_ed[0], bufete, {
+                            "numero_expediente": ed_num.strip(), "folio_protocolo": ed_fol.strip(),
+                            "fecha_resolucion": ed_fec.strip(), "demandante": ed_d1.strip(),
+                            "demandado": ed_d2.strip(), "datos_registrales": ed_reg.strip(),
+                            "monto_litigio": ed_mnt,
+                        })
+                        st.cache_data.clear()
+                        st.success("✅ Registro actualizado.")
+                        st.rerun()
+                    if btn_del_ed:
+                        eliminar_expediente(sel_ed[0], bufete)
+                        st.cache_data.clear()
+                        st.warning("🗑️ Registro eliminado de la bóveda.")
+                        st.rerun()
+
+            if es_admin:
+                st.download_button(
+                    "📥 Exportar Toda la Bóveda a Excel/CSV",
+                    dataframe_a_csv_seguro(hist_bufete),
+                    sanitizar_nombre_archivo(f"boveda_{bufete}.csv"),
+                    "text/csv",
+                )
         else:
             st.info("No hay registros almacenados todavía.")
 
@@ -964,8 +1160,7 @@ def main():
             st.header("⚙️ Gobernanza, Control de Accesos y Aislamiento de Bufetes")
             if es_super_admin:
                 st.caption(
-                    "👑 **Modo Super-Admin Maestro (`admin`):** Cada empresa/bufete creado queda aislado. "
-                    "Si ingresa un nombre repetido (ej. `A`), el sistema asignará automáticamente `A1`, `A2`, etc."
+                    "👑 **Modo Super-Admin Maestro (`admin`):** Cada empresa/bufete queda registrado en tabla `empresas` con unicidad atómica (`A` → `A1`)."
                 )
             else:
                 st.caption(f"🏢 Administración aislada de **{bufete}**.")
@@ -985,11 +1180,7 @@ def main():
                     )
                     if modo_alta == "👤 Colaborador en Bufete Existente":
                         empresas_disp = obtener_empresas_activas() or [bufete]
-                        emp_existente_sel = st.selectbox(
-                            "Bufete / Empresa Destino:",
-                            empresas_disp,
-                            key="lex_emp_destino",
-                        )
+                        emp_existente_sel = st.selectbox("Bufete / Empresa Destino:", empresas_disp, key="lex_emp_destino")
 
                 with st.form("form_crear_usuario"):
                     emp_nueva_in = ""
@@ -999,7 +1190,7 @@ def main():
                             placeholder="Ej. Bufete A (si existe creará A1)",
                         )
                     nuevo_id = st.text_input("ID o Correo de Usuario:")
-                    nuevo_pass = st.text_input("Contraseña Temporal (mín. 6 caracteres):", type="password")
+                    nuevo_pass = st.text_input("Contraseña Temporal (mín. 8 caracteres):", type="password")
                     roles_opc = (
                         ["Administrador", "Abogado Asociado", "Secretaria / Procurador"]
                         if (es_super_admin and modo_alta.startswith("🏢"))
@@ -1008,25 +1199,25 @@ def main():
                     nuevo_rol = st.selectbox("Nivel de Acceso / Rol:", roles_opc)
 
                     if st.form_submit_button("Crear Credencial de Acceso", type="primary", use_container_width=True):
-                        if not nuevo_id.strip() or len(nuevo_pass.strip()) < 6:
-                            st.warning("⚠️ Ingrese usuario válido y contraseña de al menos 6 caracteres.")
+                        if not nuevo_id.strip() or len(nuevo_pass) < 8:
+                            st.warning("⚠️ Ingrese usuario válido y contraseña de al menos 8 caracteres.")
                         elif es_super_admin and modo_alta.startswith("🏢"):
                             if not emp_nueva_in.strip():
                                 st.warning("⚠️ Escriba el nombre de la nueva empresa o bufete.")
                             else:
                                 ok, emp_final, msg = registrar_nueva_empresa_usuario(
-                                    nuevo_id.strip(), nuevo_pass.strip(), emp_nueva_in.strip(), nuevo_rol
+                                    nuevo_id.strip(), nuevo_pass, emp_nueva_in.strip(), nuevo_rol
                                 )
                                 if ok:
                                     st.success(f"✅ {msg} Usuario: `{nuevo_id.strip()}` (`{emp_final}`).")
-                                    time.sleep(1.2)
+                                    time.sleep(1.0)
                                     st.rerun()
                                 else:
                                     st.error(f"❌ {msg}")
                         else:
-                            if registrar_usuario(nuevo_id.strip(), nuevo_pass.strip(), emp_existente_sel, nuevo_rol):
+                            if registrar_usuario(nuevo_id.strip(), nuevo_pass, emp_existente_sel, nuevo_rol):
                                 st.success(f"✅ Usuario '{nuevo_id.strip()}' creado en '{emp_existente_sel}'.")
-                                time.sleep(1)
+                                time.sleep(1.0)
                                 st.rerun()
                             else:
                                 st.error("❌ Error: Ese usuario ya se encuentra registrado en el sistema.")
@@ -1050,15 +1241,19 @@ def main():
                     st.subheader("🔑 Soporte Técnico: Restablecer Contraseña Olvidada")
                     with st.form("form_reset_pass"):
                         sel_reset = st.selectbox("Seleccione usuario:", opciones_u, format_func=fmt_u)
-                        p_nueva = st.text_input("Nueva Contraseña Temporal (mín. 6 caracteres):", type="password")
+                        p_nueva = st.text_input("Nueva Contraseña Temporal (mín. 8 caracteres):", type="password")
 
                         if st.form_submit_button("Forzar Cambio de Contraseña", type="primary", use_container_width=True):
-                            if len(p_nueva.strip()) < 6:
-                                st.warning("⚠️ La contraseña temporal debe tener al menos 6 caracteres.")
+                            u_r, emp_r = sel_reset
+                            if u_r == "admin" and not es_super_admin:
+                                st.error("❌ Acción denegada: no puede modificar la clave del Super-Admin.")
+                            elif len(p_nueva) < 8:
+                                st.warning("⚠️ La contraseña temporal debe tener al menos 8 caracteres.")
                             else:
-                                u_r, emp_r = sel_reset
-                                actualizar_password(u_r, p_nueva.strip(), empresa=emp_r)
-                                st.success(f"✅ Contraseña de '{u_r}' ({emp_r}) restablecida con éxito.")
+                                if actualizar_password(u_r, p_nueva, empresa=emp_r, actor=abogado_activo):
+                                    st.success(f"✅ Contraseña de '{u_r}' ({emp_r}) restablecida con éxito.")
+                                else:
+                                    st.error("❌ No se pudo restablecer la contraseña.")
 
                     st.write("---")
                     st.subheader("🚫 Revocar Acceso / Eliminar Usuario")
@@ -1076,14 +1271,14 @@ def main():
                             else:
                                 eliminar_usuario(u_eliminar, empresa=emp_eliminar, actor=abogado_activo)
                                 st.warning(f"⚠️ Acceso de '{u_eliminar}' ({emp_eliminar}) revocado de forma permanente.")
-                                time.sleep(1)
+                                time.sleep(1.0)
                                 st.rerun()
                 else:
                     st.info("No hay colaboradores registrados todavía.")
 
 
 if __name__ == "__main__":
-    if not st.session_state["auth"]:
+    if not st.session_state.get("auth"):
         login()
     else:
         main()

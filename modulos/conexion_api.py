@@ -2,7 +2,7 @@ import json
 import os
 import re
 import time
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Tuple
 
 import fitz
 import streamlit as st
@@ -10,7 +10,6 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-MODEL_ID = "gemini-3.1-flash-lite"
 MODEL_FALLBACKS = (
     "gemini-3.1-flash-lite",
     "gemini-flash-latest",
@@ -33,7 +32,7 @@ def _obtener_cliente() -> genai.Client:
         raise ValueError(
             "GEMINI_API_KEY no configurada. Agréguela en .streamlit/secrets.toml o Secrets de Streamlit Cloud."
         )
-    return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=25000))
+    return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=45000))
 
 
 class OtorganteOParte(BaseModel):
@@ -66,7 +65,7 @@ class InstrumentoLegalSchema(BaseModel):
     ]
     otorgantes_o_partes: List[OtorganteOParte]
     datos_registrales_e_inmueble: str = Field(
-        description="Si aplica: Finca, Folio, Libro, Departamento, Matrícula Fiscal y Dirección del inmueble; de lo contrario N/A"
+        description="Si aplica: Finca, Folio, Libro, Departamento, Área, Matrícula Fiscal y Dirección del inmueble; de lo contrario N/A"
     )
     monto_cuantia_o_precio: float = Field(description="Precio, cuantía o pensión en Quetzales (solo número)")
     timbre_notarial_estimado: float = Field(
@@ -93,20 +92,21 @@ class InstrumentoLegalSchema(BaseModel):
 _PROMPT_GUATEMALA = """
 Eres un Abogado, Notario Público y Auditor Jurídico Experto en Legislación de Guatemala
 (Código de Notariado Decreto 314, Código Civil, CPCyM, Ley del Timbre Forense y Notarial Dto. 82-96,
-Ley del Timbre Fiscal Dto. 37-92).
+Ley del Timbre Fiscal Dto. 37-92, Ley del IUSI Dto. 15-98).
 
 REGLAS CRÍTICAS DE EXTRACCIÓN FORENSE:
 1. CUI / DPI EN LETRAS (Art. 13 y 29 Dto. 314): En escrituras públicas y actas guatemaltecas, los DPI de 13 dígitos
    suelen estar redactados en palabras en 3 bloques (4-5-4 dígitos), por ejemplo:
    "dos mil cuatrocientos cincuenta y seis, espacio, setenta y ocho mil novecientos uno, espacio, cero ciento uno" -> "2456789010101".
-   Tradúcelo SIEMPRE con precisión matemática a sus 13 dígitos en `identificacion_dpi` (poniendo el cero inicial de cada bloque cuando diga "cero ...").
-2. NÚMEROS Y MONTOS EN LETRAS: Convierte el número de escritura pública (ej. "NÚMERO CUARENTA Y OCHO") a su valor numérico ("48") y la cuantía pactada en letras a número exacto en `monto_cuantia_o_precio`. Si notas discordancia entre letras y números, repórtala en `alertas_forenses`.
-3. DATOS REGISTRALES: Extrae Finca, Folio, Libro, Departamento y Dirección si se trata de inmueble.
+   Tradúcelo SIEMPRE con precisión matemática a sus 13 dígitos en `identificacion_dpi`.
+2. NÚMEROS Y MONTOS EN LETRAS: Convierte el número de escritura pública a dígitos ("48") y la cuantía pactada en letras
+   a número exacto en `monto_cuantia_o_precio`. Reporta discordancias entre letras y números en `alertas_forenses`.
+3. DATOS REGISTRALES: Extrae Finca, Folio, Libro, Departamento, Área y Dirección en `datos_registrales_e_inmueble`.
 4. VALIDACIÓN DE TIMBRES Y PLAZOS EN GUATEMALA:
-   - Aviso a DICABI/Catastro Municipal (compraventas de inmuebles): 15 días hábiles (Art. 38 CDN).
-   - Testimonio Especial al Archivo General de Protocolos: 25 días hábiles (Art. 37 lit. a CDN); Timbre Notarial 2‰ (mín Q1.00, máx Q300.00; o Q10.00 valor indeterminado) + Timbre Fiscal Q0.50 por hoja.
-   - Aviso de Matrimonio Civil a RENAP: 15 días hábiles (Art. 102 Código Civil).
-   - Memoriales Judiciales: Timbre Forense Q1.00 por hoja (Dto. 82-96).
+   - Aviso DICABI/Catastro Municipal (compraventas): 15 días hábiles (Art. 38 CDN y Art. 43 Ley IUSI Dto. 15-98).
+   - Testimonio Especial al AGP: 25 días hábiles (Art. 37 lit. a CDN); Timbre Notarial 2‰ (mín Q1, máx Q300; Q10 indeterminado) + Timbre Fiscal Q0.50 por hoja.
+   - Aviso de Matrimonio Civil a RENAP: 15 días hábiles (Art. 102 CC / Art. 84 Ley RENAP).
+   - Memoriales Judiciales: Timbre Forense Q1.00 por hoja (Dto. 82-96), salvo Exhibición Personal (exenta, Art. 85 Dto. 1-86).
 5. Clasifica con precisión `categoria_documental` y emite `semaforo_alerta`.
 """
 
@@ -141,8 +141,7 @@ def _extraer_texto_documento(ruta_archivo: str) -> Optional[str]:
     if ext != ".pdf":
         return None
 
-    doc = fitz.open(ruta_archivo)
-    try:
+    with fitz.open(ruta_archivo) as doc:
         bloques = []
         for idx, page in enumerate(doc):
             txt = (page.get_text("text") or "").strip()
@@ -152,25 +151,26 @@ def _extraer_texto_documento(ruta_archivo: str) -> Optional[str]:
         if len(completo) >= 250 and len(re.findall(r"[A-Za-zÁÉÍÓÚáéíóúÑñ0-9]", completo)) >= 120:
             return completo[:120000]
         return None
-    finally:
-        doc.close()
 
 
-def _preparar_partes_multimodales(ruta_archivo: str, max_paginas: int = 10) -> List[types.Part]:
-    """Convierte PDF escaneado o imagen a Partes para Gemini Vision (150 DPI para conservar legibilidad de sellos/folios)."""
+def _preparar_partes_multimodales(ruta_archivo: str, max_paginas: int = 10) -> Tuple[List[types.Part], str]:
+    """Convierte PDF escaneado o imagen a Partes JPEG optimizadas para Gemini Vision (150 DPI)."""
     ext = os.path.splitext(ruta_archivo)[1].lower()
     partes: List[types.Part] = []
+    aviso_truncado = ""
 
     if ext == ".pdf":
-        doc = fitz.open(ruta_archivo)
-        try:
-            total_paginas = min(len(doc), max_paginas)
+        with fitz.open(ruta_archivo) as doc:
+            total_doc = len(doc)
+            total_paginas = min(total_doc, max_paginas)
+            if total_doc > max_paginas:
+                aviso_truncado = f"Documento escaneado truncado a las primeras {max_paginas} de {total_doc} páginas."
             for idx in range(total_paginas):
                 pix = doc.load_page(idx).get_pixmap(dpi=150)
-                partes.append(types.Part.from_bytes(data=pix.tobytes("png"), mime_type="image/png"))
-        finally:
-            doc.close()
-        return partes
+                partes.append(
+                    types.Part.from_bytes(data=pix.tobytes("jpeg", jpg_quality=85), mime_type="image/jpeg")
+                )
+        return partes, aviso_truncado
 
     mime_map = {
         ".png": "image/png",
@@ -178,17 +178,18 @@ def _preparar_partes_multimodales(ruta_archivo: str, max_paginas: int = 10) -> L
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
     }
-    mime_type = mime_map.get(ext, "image/jpeg")
+    if ext not in mime_map:
+        return [], ""
     with open(ruta_archivo, "rb") as f:
-        partes.append(types.Part.from_bytes(data=f.read(), mime_type=mime_type))
-    return partes
+        partes.append(types.Part.from_bytes(data=f.read(), mime_type=mime_map[ext]))
+    return partes, ""
 
 
 def analizar_expediente(ruta_archivo: str) -> str:
     """
     Analiza un documento legal/notarial de Guatemala mediante extracción híbrida:
-    1) Texto digital nativo en PDF (más rápido, completo y económico).
-    2) Gemini Vision a 150 DPI para escaneos y fotografías.
+    1) Texto digital nativo en PDF, DOCX o TXT.
+    2) Gemini Vision (JPEG 150 DPI hasta 10 páginas) para escaneos y fotografías.
     """
     if not os.path.exists(ruta_archivo):
         return json.dumps({"error": "Archivo no encontrado en ruta temporal"})
@@ -197,14 +198,17 @@ def analizar_expediente(ruta_archivo: str) -> str:
     try:
         cliente = _obtener_cliente()
         contenidos: List[object] = []
+        aviso_truncado = ""
 
         texto_doc = _extraer_texto_documento(ruta_archivo)
         if texto_doc:
             contenidos.append(f"{_PROMPT_GUATEMALA}\n\nTEXTO ÍNTEGRO DEL DOCUMENTO:\n{texto_doc}")
+        elif ext in (".docx", ".txt"):
+            return json.dumps({"error": f"El archivo {ext} está vacío o no contiene texto legible."})
         else:
-            partes_img = _preparar_partes_multimodales(ruta_archivo, max_paginas=10)
+            partes_img, aviso_truncado = _preparar_partes_multimodales(ruta_archivo, max_paginas=10)
             if not partes_img:
-                return json.dumps({"error": "No se pudieron renderizar páginas válidas del archivo."})
+                return json.dumps({"error": "Formato no soportado o no se pudieron renderizar páginas válidas."})
             contenidos = [_PROMPT_GUATEMALA] + partes_img
 
         ultimo_error = "Sin respuesta de Gemini"
@@ -220,6 +224,14 @@ def analizar_expediente(ruta_archivo: str) -> str:
                     ),
                 )
                 if response.text and response.text.strip():
+                    if aviso_truncado:
+                        try:
+                            obj = json.loads(response.text)
+                            al = str(obj.get("alertas_forenses") or "").strip()
+                            obj["alertas_forenses"] = aviso_truncado if al.lower() in ("", "ninguna", "none") else f"{al} | {aviso_truncado}"
+                            return json.dumps(obj, ensure_ascii=False)
+                        except Exception:
+                            pass
                     return response.text
             except Exception as e_mod:
                 ultimo_error = str(e_mod)
